@@ -24,9 +24,9 @@ jobs:
       #   gh secret set MACOS_NOTARY_APPLE_ID / MACOS_NOTARY_TEAM_ID / MACOS_NOTARY_PASSWORD
       SIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -66,7 +66,7 @@ jobs:
       - name: Verify signature
         run: codesign --verify --deep --strict --verbose=2 build/darwin-universal/FundBar.app
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: FundBar-macos
           if-no-files-found: error
@@ -76,7 +76,7 @@ jobs:
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           generate_release_notes: true
