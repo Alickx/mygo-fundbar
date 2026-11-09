@@ -21,6 +21,37 @@ func TestSymbol(t *testing.T) {
 // A slice of a holdings page, as the fund site sends it.
 const holdingsHTML = `<div class='box'><div class='boxitem w790'><h4 class='t'><label class='right lab2 xq505'>&nbsp;&nbsp;&nbsp;&nbsp;来源：天天基金&nbsp;&nbsp;&nbsp;&nbsp;截止至：<font class='px12'>2026-09-30</font></label></h4><table class='w782 comm tzxq'><tbody><tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/1.600519'>600519</a></td><td class='tol'><a href='//quote.eastmoney.com/unify/r/1.600519'>贵州茅台</a></td><td class='tor'><span data-id='dq600519'></span></td><td class='tor'><span data-id='zd600519'></span></td><td class='xglj'><a href='ccbdxq_005827_600519.html' class='red'>变动详情</a></td><td class='tor'>6.37%</td><td class='tor'>95.85</td><td class='tor'>120,638.73</td></tr><tr><td>2</td><td><a href='//quote.eastmoney.com/unify/r/116.00883'>00883</a></td><td class='tol'><a href='//quote.eastmoney.com/unify/r/116.00883'>中国海洋石油</a></td><td class='tor'><span data-id='dq00883'></span></td><td class='tor'><span data-id='zd00883'></span></td><td class='xglj'><a href='ccbdxq_005827_00883.html'>变动详情</a></td><td class='tor'>6.22%</td><td class='tor'>1,000.00</td><td class='tor'>20,000.00</td></tr></tbody></table></div></div>`
 
+func TestSecID(t *testing.T) {
+	cases := map[string]string{
+		"sh600519": "1.600519",
+		"sz000858": "0.000858",
+		"hk00700":  "116.00700",
+		"usAAPL":   "105.AAPL",
+	}
+	for in, want := range cases {
+		got, ok := secID(in)
+		if !ok || got != want {
+			t.Errorf("secID(%q) = %q, %v, want %q", in, got, ok, want)
+		}
+	}
+	if _, ok := secID("600519"); ok {
+		t.Error("expected no secid without a market")
+	}
+}
+
+func TestSplitConcepts(t *testing.T) {
+	got := splitConcepts("白酒, 超级品牌，央国企改革; ")
+	want := []string{"白酒", "超级品牌", "央国企改革"}
+	if len(got) != len(want) {
+		t.Fatalf("concepts = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("concept %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestParseHoldings(t *testing.T) {
 	got := parseHoldings(holdingsHTML)
 	if len(got) != 2 {

@@ -49,10 +49,14 @@ func parseDay(date string) time.Time {
 	return t
 }
 
-// chartCard shows the fund's net asset value over a period the user picks.
+// chartCard shows the fund's net asset value over a period the user picks,
+// as a line or as the value of each day.
 func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	if a.period < 0 || a.period >= len(periods) {
 		a.period = 0
+	}
+	if a.navView < 0 || a.navView > 1 {
+		a.navView = 0
 	}
 	navs := windowOf(f, a.period)
 	change := 0.0
@@ -66,26 +70,48 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	card(c, t).Gap(8).Children(func() {
 		// The readout has its own line: selecting a date never pushes the
 		// period controls out of the card or changes the plot's position.
-		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-			ui.Text(c, "净值走势").FontSize(13).FontWeight(600).NoWrap().Shrink(0)
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+			title := "净值走势"
+			if a.navView == 1 {
+				title = "历史净值"
+			}
+			ui.Text(c, title).FontSize(13).FontWeight(600).NoWrap().Shrink(0)
 			ui.Spacer(c)
+			ui.Segmented(c, &a.navView, "走势", "列表").Shrink(0).
+				OnChange(func() {
+					a.pick = -1
+					a.save()
+				})
 			ui.Segmented(c, &a.period, "近1月", "近3月", "近6月", "近1年").Shrink(0).
 				OnChange(func() { a.pick = -1 })
 		})
 		ui.Row(c).Height(18).AlignItems(ui.Center).Children(func() {
-			if len(navs) > 1 {
-				info := periods[a.period].label + "净值变化 " + pct(change)
-				color := up(t, change)
-				if a.pick >= 0 && a.pick < len(navs) {
-					n := navs[a.pick]
-					info = fmt.Sprintf("%s · 净值 %.4f · 当日 %s",
-						n.Date, n.Unit, pct(n.Pct))
-					color = up(t, n.Pct)
-				}
-				ui.Text(c, info).FontSize(11.5).
-					TextColor(color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(info)
+			if len(navs) == 0 {
+				return
 			}
+			info := periods[a.period].label + "净值变化 " + pct(change)
+			color := up(t, change)
+			if len(navs) == 1 {
+				info = "只有 " + navs[0].Date + " 一个净值日"
+				color = t.TextMuted
+			}
+			if a.navView == 1 {
+				info = fmt.Sprintf("%s · %d 个交易日 · 区间 %s",
+					periods[a.period].label, len(navs), pct(change))
+			}
+			if a.pick >= 0 && a.pick < len(navs) {
+				n := navs[a.pick]
+				info = fmt.Sprintf("%s · 净值 %.4f · 当日 %s",
+					n.Date, n.Unit, pct(n.Pct))
+				color = up(t, n.Pct)
+			}
+			ui.Text(c, info).FontSize(11.5).
+				TextColor(color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(info)
 		})
+		if a.navView == 1 {
+			a.navTable(c, t, navs)
+			return
+		}
 		if len(navs) < 2 {
 			ui.Column(c).Height(164).Center().Children(func() {
 				ui.Text(c, "还没有足够的历史净值").FontSize(11.5).TextColor(t.TextMuted)
@@ -93,6 +119,59 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			return
 		}
 		a.plot(c, t, navs, up(t, change))
+	})
+}
+
+// navTable lists each trading day's published value, newest first.
+func (a *App) navTable(c *ui.Context, t *ui.Theme, navs []model.Nav) {
+	if len(navs) == 0 {
+		ui.Column(c).Height(120).Center().Children(func() {
+			ui.Text(c, "还没有历史净值").FontSize(11.5).TextColor(t.TextMuted)
+		})
+		return
+	}
+	const dateW, numW = 104, 86
+	head := func() {
+		ui.Row(c).Padding(0, 7, 4, 7).Children(func() {
+			ui.Text(c, "日期").FontSize(11).TextColor(t.TextMuted).Width(dateW)
+			ui.Text(c, "单位净值").FontSize(11).TextColor(t.TextMuted).
+				Grow(1).Basis(0).TextAlign(ui.End)
+			ui.Text(c, "累计净值").FontSize(11).TextColor(t.TextMuted).
+				Width(numW).TextAlign(ui.End)
+			ui.Text(c, "日涨跌").FontSize(11).TextColor(t.TextMuted).
+				Width(numW).TextAlign(ui.End)
+		})
+	}
+	head()
+	height := float32(len(navs))*27 + 8
+	if height > 300 {
+		height = 300
+	}
+	ui.Scroll(c).Height(height).Children(func() {
+		ui.Column(c).Gap(1).Children(func() {
+			for i := len(navs) - 1; i >= 0; i-- {
+				n := navs[i]
+				row := ui.Row(c).Padding(3, 7).Radius(6).AlignItems(ui.Center)
+				if (len(navs)-1-i)%2 == 1 {
+					row.Background(t.Text.Alpha(0.035))
+				}
+				row.Children(func() {
+					ui.Text(c, n.Date).FontSize(11.5).TextColor(t.TextMuted).
+						FontFeatures("tnum").NoWrap().Width(dateW)
+					ui.Textf(c, "%.4f", n.Unit).FontSize(12).FontWeight(500).
+						FontFeatures("tnum").NoWrap().Grow(1).Basis(0).
+						TextAlign(ui.End)
+					acc := "—"
+					if n.Acc > 0 {
+						acc = fmt.Sprintf("%.4f", n.Acc)
+					}
+					ui.Text(c, acc).FontSize(11.5).TextColor(t.TextMuted).
+						FontFeatures("tnum").NoWrap().Width(numW).TextAlign(ui.End)
+					ui.Text(c, pct(n.Pct)).FontSize(11.5).TextColor(up(t, n.Pct)).
+						FontFeatures("tnum").NoWrap().Width(numW).TextAlign(ui.End)
+				})
+			}
+		})
 	})
 }
 

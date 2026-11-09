@@ -2,10 +2,13 @@ package app
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"fundbar/internal/model"
 )
 
 // View builds the window from the app's state.
@@ -165,8 +168,19 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, vibrant bool) {
 			a.list.Label = func(i int) string { return a.funds[i].Name }
 			a.list.Selected = &a.sel
 			a.list.Reorder = a.reorder
-			ui.List(c, &a.list, len(a.funds)).Grow(1).Padding(0, 8).Gap(2).
-				Rows(func(row ui.ListRow) { a.fundRow(row, t) })
+			// A chosen row is painted in the list's accent before the row
+			// builds. In the dark theme that accent under the row's rounded
+			// corners reads as a blue ring, so the list takes a neutral
+			// accent of its own: the row's background sits on a like color.
+			listTheme := *t
+			if listTheme.Dark {
+				listTheme.Accent = t.SurfaceHover
+				listTheme.InactiveAccent = t.SurfaceHover
+			}
+			ui.Themed(c, &listTheme).Grow(1).Background(ui.Transparent).Children(func() {
+				ui.List(c, &a.list, len(a.funds)).Grow(1).Padding(0, 8).Gap(2).
+					Rows(func(row ui.ListRow) { a.fundRow(row, t) })
+			})
 		})
 
 		ui.Row(c).Padding(6, 14, 10, 14).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -238,16 +252,25 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 
 	// A soft tint and a hairline edge, so that the chosen fund says so
 	// without shouting over the numbers beside it. The tint is opaque: the
-	// list paints the chosen row in the accent color behind it.
+	// list paints the chosen row in the accent color behind it, and the
+	// inner row's corners must cover it exactly rather than show it as a
+	// blue ring.
 	bg, edge := ui.Transparent, ui.Transparent
 	tileBg := tint.Alpha(0.13)
 	if chosen {
-		bg = t.Surface.Mix(t.Accent, 0.10)
-		edge = t.Accent.Alpha(0.24)
+		if t.Dark {
+			// The accent is too bright against the dark surface: the choice
+			// is a neutral lift, not a blue ring around the corners.
+			bg = t.SurfaceHover
+			edge = t.Text.Alpha(0.12)
+		} else {
+			bg = t.Surface.Mix(t.Accent, 0.10)
+			edge = t.Accent.Alpha(0.18)
+		}
 		tileBg = t.Surface.Mix(tint, 0.16)
 	}
 
-	r := ui.Row(c).Padding(8, 9).Radius(10).Gap(10).AlignItems(ui.Center).
+	r := ui.Row(c).Padding(8, 9).Radius(t.Radius).Gap(10).AlignItems(ui.Center).
 		Background(bg).Border(1, edge).FillWidth()
 	r.Transition(ui.ElementTransition{Duration: 140 * time.Millisecond})
 	r.ContextMenu(func(m *ui.Menu) {
@@ -318,6 +341,7 @@ func (a *App) main(c *ui.Context, t *ui.Theme) {
 				a.stats(c, t, f)
 				a.holdingSection(c, t, f)
 				a.chartCard(c, t, f)
+				a.industriesCard(c, t, f)
 				a.holdingsCard(c, t, f)
 				ui.Text(c, "估值由基金季报的重仓股及其实时涨跌推算，仅供参考；"+
 					"实际净值以基金公司公布为准。").FontSize(10.5).TextColor(t.TextMuted)
@@ -424,7 +448,7 @@ func (a *App) detailTitle(c *ui.Context, t *ui.Theme, f *Fund) {
 						FontFeatures("tnum").Padding(1, 6).Radius(5).
 						Background(t.SurfaceHover)
 					if f.Type != "" {
-						ui.Text(c, f.Type).FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+						pill(c, f.Type, t.TextMuted, t.Text.Alpha(0.06))
 					}
 				})
 			})
@@ -587,7 +611,19 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 					row.Background(t.Text.Alpha(0.035))
 				}
 				row.Children(func() {
-					ui.Text(c, h.Name).FontSize(12).Grow(1).Basis(0).SingleLine().Ellipsis("…").Tooltip(h.Name)
+					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(1).Children(func() {
+						ui.Text(c, h.Name).FontSize(12).SingleLine().Ellipsis("…").Tooltip(h.Name)
+						p := f.Profiles[h.Symbol]
+						if line := stockProfileLine(p); line != "" {
+							detail := ui.Text(c, line).FontSize(10.5).
+								TextColor(t.TextMuted).SingleLine().Ellipsis("…")
+							if len(p.Concepts) > 0 {
+								detail.Tooltip(line + "\n" + strings.Join(p.Concepts, " · "))
+							} else {
+								detail.Tooltip(line)
+							}
+						}
+					})
 					ui.Textf(c, "%.2f%%", h.Weight).FontSize(11.5).
 						TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
 						Width(numW).TextAlign(ui.End)
@@ -597,6 +633,73 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			}
 		})
 	})
+}
+
+// industriesCard shows the fund's allocation by industry, and how much of it
+// each industry takes.
+func (a *App) industriesCard(c *ui.Context, t *ui.Theme, f *Fund) {
+	if len(f.Industries) == 0 {
+		return
+	}
+	ui.Column(c).Gap(9).Children(func() {
+		shown := make([]model.Industry, 0, len(f.Industries))
+		for _, ind := range f.Industries {
+			if ind.Weight >= 0.1 {
+				shown = append(shown, ind)
+			}
+		}
+		if len(shown) == 0 {
+			shown = f.Industries
+		}
+		more := 0
+		if len(shown) > 6 {
+			more = len(shown) - 6
+			shown = shown[:6]
+		}
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Wrap().Children(func() {
+			ui.Text(c, "行业配置").FontSize(13).FontWeight(600).NoWrap().Shrink(0)
+			if f.IndustryReport != "" {
+				ui.Text(c, "报告期 "+f.IndustryReport).FontSize(11.5).
+					TextColor(t.TextMuted).FontFeatures("tnum").NoWrap()
+			}
+			ui.Spacer(c)
+			if more > 0 {
+				ui.Textf(c, "另有 %d 个较小行业", more).FontSize(11.5).
+					TextColor(t.TextMuted).NoWrap()
+			}
+		})
+		body := card(c, t)
+		body.Gap(9).Children(func() {
+			maxWeight := shown[0].Weight
+			for _, ind := range shown {
+				value := 0.0
+				if maxWeight > 0 {
+					value = ind.Weight / maxWeight
+				}
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, ind.Name).FontSize(11.5).Grow(1).Basis(0).
+						SingleLine().Ellipsis("…").Tooltip(ind.Name)
+					ui.Progress(c, math.Max(0, math.Min(1, value))).
+						Width(118).Shrink(0)
+					ui.Textf(c, "%.1f%%", ind.Weight).FontSize(11.5).
+						TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
+						Width(52).TextAlign(ui.End)
+				})
+			}
+		})
+	})
+}
+
+// stockProfileLine names a stock's industry and board, when it has them.
+func stockProfileLine(p model.StockProfile) string {
+	var parts []string
+	if p.Industry != "" {
+		parts = append(parts, p.Industry)
+	}
+	if p.Board != "" {
+		parts = append(parts, p.Board)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // holdingSection shows the shares the user holds, and their price: read

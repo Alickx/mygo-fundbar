@@ -27,6 +27,22 @@ type Nav struct {
 	Pct float64
 }
 
+// Industry is a share of a fund's net assets in one industry, as its
+// quarterly report gives it.
+type Industry struct {
+	Name string
+	// Weight is the industry's share of the fund's net assets, in percent.
+	Weight float64
+}
+
+// StockProfile says what a stock is: the industry it belongs to, the board
+// it trades on, and the themes it is traded with.
+type StockProfile struct {
+	Industry string
+	Board    string
+	Concepts []string
+}
+
 // Quote is a stock's price now.
 type Quote struct {
 	Symbol string

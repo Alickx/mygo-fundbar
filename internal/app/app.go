@@ -29,11 +29,14 @@ type Fund struct {
 	Cost   float64
 
 	// Navs is the fund's net asset value each day, oldest first.
-	Navs          []model.Nav
-	Holdings      []model.Holding
-	Report        string
-	StockPosition float64
-	Quotes        map[string]model.Quote
+	Navs           []model.Nav
+	Holdings       []model.Holding
+	Report         string
+	StockPosition  float64
+	Quotes         map[string]model.Quote
+	Profiles       map[string]model.StockProfile
+	Industries     []model.Industry
+	IndustryReport string
 
 	Est    model.Estimate
 	HasEst bool
@@ -159,7 +162,10 @@ type App struct {
 	sel    int
 	period int
 	pick   int
-	query  string
+	// navView is the history the chart card shows: the line, or a list of
+	// each day's value.
+	navView int
+	query   string
 
 	// sidebarWidth is how wide the user made the list of funds, and
 	// savedSidebar what the file has.
@@ -231,6 +237,7 @@ func (a *App) Load() {
 		}
 	}
 	a.period = data.Period
+	a.navView = data.NavView
 	a.sidebarWidth = data.SidebarWidth
 	if a.sidebarWidth == 0 {
 		a.sidebarWidth = 348
@@ -248,6 +255,9 @@ func (a *App) fill(f *Fund, snap *store.Snapshot) {
 	f.StockPosition = snap.Fund.StockPosition
 	f.Holdings = snap.Holdings
 	f.Report = snap.Report
+	f.Industries = snap.Fund.Industries
+	f.IndustryReport = snap.Fund.IndustryReport
+	f.Profiles = snap.Profiles
 	f.Loaded = true
 	a.estimate(f, snap.Quotes)
 }
@@ -269,7 +279,7 @@ func (a *App) estimate(f *Fund, quotes map[string]model.Quote) {
 
 // save writes the funds the user follows.
 func (a *App) save() {
-	data := &store.Data{Period: a.period, SidebarWidth: a.sidebarWidth}
+	data := &store.Data{Period: a.period, NavView: a.navView, SidebarWidth: a.sidebarWidth}
 	for _, f := range a.funds {
 		data.Funds = append(data.Funds, store.Entry{
 			Code: f.Code, Type: f.Type, Shares: f.Shares, Cost: f.Cost,
@@ -333,9 +343,11 @@ func (a *App) refresh() {
 		}
 		wg.Wait()
 
-		// One request prices every stock of every fund.
-		var symbols []string
+		// One request prices every stock of every fund, and one more reads
+		// the industry of those whose profiles the cache does not hold yet.
+		var symbols, profileSymbols []string
 		seen := map[string]bool{}
+		seenProfiles := map[string]bool{}
 		for _, r := range results {
 			if r.snap == nil {
 				continue
@@ -348,9 +360,13 @@ func (a *App) refresh() {
 					seen[h.Symbol] = true
 					symbols = append(symbols, h.Symbol)
 				}
+				if _, ok := r.snap.Profiles[h.Symbol]; !ok && !seenProfiles[h.Symbol] {
+					seenProfiles[h.Symbol] = true
+					profileSymbols = append(profileSymbols, h.Symbol)
+				}
 			}
 		}
-		quotes, qerr := a.src.Quotes(ctx, symbols)
+		quotes, profiles, qerr := a.priceAndProfile(ctx, symbols, profileSymbols)
 
 		a.win.Update(func() {
 			for _, r := range results {
@@ -363,6 +379,17 @@ func (a *App) refresh() {
 					continue
 				}
 				r.snap.Quotes = quotes
+				if len(profiles) > 0 {
+					if r.snap.Profiles == nil {
+						r.snap.Profiles = make(map[string]model.StockProfile, len(profiles))
+					}
+					for symbol, profile := range profiles {
+						r.snap.Profiles[symbol] = profile
+					}
+				}
+				if len(r.snap.Profiles) == 0 {
+					r.snap.Profiles = cachedProfiles(cached[r.code])
+				}
 				a.fill(f, r.snap)
 				f.Err = ""
 				store.SaveSnapshot(a.dir, f.Code, r.snap)
@@ -381,7 +408,8 @@ func (a *App) refresh() {
 
 // readFund reads a fund, from the cache when it is today's.
 func (a *App) readFund(ctx context.Context, code, kind string, cached *store.Snapshot) *store.Snapshot {
-	if cached != nil && time.Since(cached.At) < 20*time.Minute && fresh(cached) {
+	if cached != nil && time.Since(cached.At) < 20*time.Minute && fresh(cached) &&
+		cached.Fund.IndustriesLoaded {
 		return cached
 	}
 	fund, err := a.src.Fund(ctx, code)
@@ -399,7 +427,42 @@ func (a *App) readFund(ctx context.Context, code, kind string, cached *store.Sna
 		// Nothing to estimate from, but the fund itself is worth showing.
 		holdings, report = cachedHoldings(cached), cachedReport(cached)
 	}
-	return &store.Snapshot{At: time.Now(), Fund: fund, Holdings: holdings, Report: report}
+	industries, industryReport, err := a.src.Industries(ctx, code)
+	if err == nil {
+		fund.Industries = industries
+		fund.IndustryReport = industryReport
+		fund.IndustriesLoaded = true
+	} else if cached != nil {
+		fund.Industries = cached.Fund.Industries
+		fund.IndustryReport = cached.Fund.IndustryReport
+		fund.IndustriesLoaded = cached.Fund.IndustriesLoaded
+	}
+	return &store.Snapshot{
+		At: time.Now(), Fund: fund, Holdings: holdings, Report: report,
+		Profiles: cachedProfiles(cached),
+	}
+}
+
+// priceAndProfile asks for the prices and profiles of every stock at once.
+func (a *App) priceAndProfile(ctx context.Context, symbols, profileSymbols []string) (map[string]model.Quote, map[string]model.StockProfile, error) {
+	var quotes map[string]model.Quote
+	var profiles map[string]model.StockProfile
+	var qerr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		quotes, qerr = a.src.Quotes(ctx, symbols)
+	}()
+	if len(profileSymbols) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			profiles, _ = a.src.Profiles(ctx, profileSymbols)
+		}()
+	}
+	wg.Wait()
+	return quotes, profiles, qerr
 }
 
 // fresh reports that a snapshot's net asset values are today's, or that the
@@ -432,6 +495,13 @@ func cachedReport(s *store.Snapshot) string {
 		return ""
 	}
 	return s.Report
+}
+
+func cachedProfiles(s *store.Snapshot) map[string]model.StockProfile {
+	if s == nil {
+		return nil
+	}
+	return s.Profiles
 }
 
 func latestQuote(quotes map[string]model.Quote, holdings []model.Holding) time.Time {

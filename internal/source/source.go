@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,14 @@ type Fund struct {
 	StockPosition float64
 	// Symbols are the stocks in the fund's latest report, as "sh600519".
 	Symbols []string
+	// Industries is the fund's allocation by industry in its latest report,
+	// heaviest first.
+	Industries []model.Industry
+	// IndustryReport is the date of that report.
+	IndustryReport string
+	// IndustriesLoaded tells a cache without industries from one whose
+	// report simply holds none.
+	IndustriesLoaded bool
 }
 
 func (c *Client) get(ctx context.Context, url, referer string) ([]byte, error) {
@@ -164,6 +173,149 @@ func (c *Client) Holdings(ctx context.Context, code string) ([]model.Holding, st
 		return nil, report, errNotFound
 	}
 	return holdings, report, nil
+}
+
+// Industries reads the fund's allocation by industry in its latest report,
+// heaviest first.
+func (c *Client) Industries(ctx context.Context, code string) ([]model.Industry, string, error) {
+	url := "https://api.fund.eastmoney.com/f10/HYPZ/?fundCode=" + code + "&year="
+	body, err := c.get(ctx, url, "https://fundf10.eastmoney.com/hytz_"+code+".html")
+	if err != nil {
+		return nil, "", err
+	}
+	var res struct {
+		Data struct {
+			QuarterInfos []struct {
+				Report string `json:"JZRQ"`
+				Rows   []struct {
+					Name   string `json:"HYMC"`
+					Weight string `json:"ZJZBL"`
+				} `json:"HYPZInfo"`
+			} `json:"QuarterInfos"`
+		} `json:"Data"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, "", fmt.Errorf("industries: %w", err)
+	}
+	if len(res.Data.QuarterInfos) == 0 {
+		return nil, "", nil
+	}
+	latest := res.Data.QuarterInfos[0]
+	industries := make([]model.Industry, 0, len(latest.Rows))
+	for _, row := range latest.Rows {
+		name := strings.TrimSpace(row.Name)
+		weight, err := strconv.ParseFloat(strings.TrimSpace(row.Weight), 64)
+		if name == "" || err != nil || weight <= 0 {
+			continue
+		}
+		industries = append(industries, model.Industry{Name: name, Weight: weight})
+	}
+	if len(industries) == 0 {
+		return nil, latest.Report, nil
+	}
+	sort.SliceStable(industries, func(i, j int) bool {
+		return industries[i].Weight > industries[j].Weight
+	})
+	return industries, latest.Report, nil
+}
+
+// Profiles reads the industry, board and themes of stocks, in one request
+// per batch.
+func (c *Client) Profiles(ctx context.Context, symbols []string) (map[string]model.StockProfile, error) {
+	out := make(map[string]model.StockProfile, len(symbols))
+	const chunk = 60
+	for start := 0; start < len(symbols); start += chunk {
+		end := min(start+chunk, len(symbols))
+		if err := c.profilesChunk(ctx, symbols[start:end], out); err != nil {
+			return out, err
+		}
+	}
+	// A stock the endpoint knows nothing about still has a place, so that
+	// it is not asked for again every refresh.
+	for _, symbol := range symbols {
+		if _, ok := out[symbol]; !ok {
+			out[symbol] = model.StockProfile{}
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) profilesChunk(ctx context.Context, symbols []string, out map[string]model.StockProfile) error {
+	var secids []string
+	byCode := make(map[string]string, len(symbols))
+	for _, symbol := range symbols {
+		sid, ok := secID(symbol)
+		if !ok {
+			continue
+		}
+		secids = append(secids, sid)
+		byCode[symbol[2:]] = symbol
+	}
+	if len(secids) == 0 {
+		return nil
+	}
+	url := "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=" +
+		strings.Join(secids, ",") + "&fields=f12,f100,f102,f103"
+	body, err := c.get(ctx, url, "https://quote.eastmoney.com/")
+	if err != nil {
+		return err
+	}
+	var res struct {
+		Data struct {
+			Rows []struct {
+				Code     string `json:"f12"`
+				Industry string `json:"f100"`
+				Board    string `json:"f102"`
+				Concepts string `json:"f103"`
+			} `json:"diff"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return fmt.Errorf("profiles: %w", err)
+	}
+	for _, row := range res.Data.Rows {
+		symbol := byCode[row.Code]
+		if symbol == "" {
+			continue
+		}
+		out[symbol] = model.StockProfile{
+			Industry: strings.TrimSpace(row.Industry),
+			Board:    strings.TrimSpace(row.Board),
+			Concepts: splitConcepts(row.Concepts),
+		}
+	}
+	return nil
+}
+
+// secID turns "sh600519" into Eastmoney's "1.600519".
+func secID(symbol string) (string, bool) {
+	if len(symbol) < 3 {
+		return "", false
+	}
+	switch symbol[:2] {
+	case "sh":
+		return "1." + symbol[2:], true
+	case "sz":
+		return "0." + symbol[2:], true
+	case "hk":
+		return "116." + symbol[2:], true
+	case "us":
+		return "105." + symbol[2:], true
+	}
+	return "", false
+}
+
+func splitConcepts(s string) []string {
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == '，' || r == ';' || r == '；'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func parseHoldings(src string) []model.Holding {

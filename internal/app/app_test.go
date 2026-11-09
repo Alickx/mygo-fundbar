@@ -20,7 +20,11 @@ func preview(t *testing.T) *App {
 		{
 			Code: "161725", Name: "招商中证白酒指数(LOF)A", Type: "指数型-股票",
 			Shares: 12000, Cost: 0.62, Loaded: true, Report: "2026-09-30",
-			StockPosition: 85.7,
+			StockPosition: 85.7, IndustryReport: "2026-09-30",
+			Industries: []model.Industry{
+				{Name: "制造业", Weight: 94.47},
+				{Name: "金融业", Weight: 0.01},
+			},
 			Navs: []model.Nav{
 				{Date: yesterday, Unit: 0.5896, Acc: 2.3057, Pct: -0.51},
 				{Date: today, Unit: 0.5859, Acc: 2.3020, Pct: -0.63},
@@ -28,6 +32,11 @@ func preview(t *testing.T) *App {
 			Holdings: []model.Holding{
 				{Symbol: "sh600519", Code: "600519", Name: "贵州茅台", Weight: 18.54},
 				{Symbol: "sz000858", Code: "000858", Name: "五粮液", Weight: 9.05},
+			},
+			Profiles: map[string]model.StockProfile{
+				"sh600519": {Industry: "白酒Ⅱ", Board: "贵州板块",
+					Concepts: []string{"白酒", "超级品牌"}},
+				"sz000858": {Industry: "白酒Ⅱ", Board: "四川板块"},
 			},
 		},
 		{
@@ -136,6 +145,44 @@ func abs(v float64) float64 {
 		return -v
 	}
 	return v
+}
+
+func TestNavListShowsEachTradingDay(t *testing.T) {
+	a := preview(t)
+	a.funds[0].Navs = []model.Nav{
+		{Date: "2026-10-08", Unit: 0.6100, Acc: 2.3300, Pct: 0.5},
+		{Date: "2026-10-09", Unit: 0.6050, Acc: 2.3250, Pct: -0.82},
+		{Date: "2026-10-10", Unit: 0.6080, Acc: 2.3280, Pct: 0.50},
+	}
+	a.navView = 1
+	tt := ui.NewTester(a.View, 1080, 900)
+	tt.Frame()
+	if !tt.HasText("历史净值") || !tt.HasText("日期") {
+		t.Fatal("expected the list of each day's value")
+	}
+	for _, date := range []string{"2026-10-08", "2026-10-09", "2026-10-10"} {
+		if !tt.HasText(date) {
+			t.Fatalf("missing day %s in the history list", date)
+		}
+	}
+	if err := tt.Click("走势"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.navView != 0 {
+		t.Fatal("expected the line view")
+	}
+}
+
+func TestIndustryAndStockProfileAreShown(t *testing.T) {
+	a := preview(t)
+	tt := ui.NewTester(a.View, 1080, 900)
+	tt.Frame()
+	for _, text := range []string{"行业配置", "制造业", "白酒Ⅱ · 贵州板块"} {
+		if !tt.HasText(text) {
+			t.Fatalf("missing %q", text)
+		}
+	}
 }
 
 func TestMoneyAndPadding(t *testing.T) {

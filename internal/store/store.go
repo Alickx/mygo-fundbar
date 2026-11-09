@@ -31,6 +31,9 @@ type Data struct {
 	Funds    []Entry `json:"funds"`
 	Selected string  `json:"selected,omitempty"`
 	Period   int     `json:"period,omitempty"`
+	// NavView is the history the chart card shows: 0 for the line, 1 for the
+	// list of each day's value.
+	NavView int `json:"navView,omitempty"`
 	// SidebarWidth is how wide the user made the list of funds.
 	SidebarWidth float32 `json:"sidebarWidth,omitempty"`
 }
@@ -68,11 +71,12 @@ func (d *Data) Save(path string) error {
 // Snapshot is what the app read about a fund, kept to open the window with
 // it before the network answers.
 type Snapshot struct {
-	At       time.Time              `json:"at"`
-	Fund     *source.Fund           `json:"fund"`
-	Holdings []model.Holding        `json:"holdings"`
-	Report   string                 `json:"report"`
-	Quotes   map[string]model.Quote `json:"quotes,omitempty"`
+	At       time.Time                     `json:"at"`
+	Fund     *source.Fund                  `json:"fund"`
+	Holdings []model.Holding               `json:"holdings"`
+	Report   string                        `json:"report"`
+	Quotes   map[string]model.Quote        `json:"quotes,omitempty"`
+	Profiles map[string]model.StockProfile `json:"profiles,omitempty"`
 }
 
 func snapshotPath(dir, code string) string {
