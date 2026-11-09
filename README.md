@@ -6,6 +6,9 @@
 
 ![light](docs/screenshot.png)
 ![dark](docs/screenshot-dark.png)
+<img src="docs/screenshot-settings.png" width="480" alt="设置">
+
+（截图里的持仓和收益是示例数字。）
 
 ## 为什么自己算估值
 
@@ -39,11 +42,13 @@
 
 ## 功能
 
-- **实时估值**：交易时段每 45 秒刷新，收盘后显示已公布净值
-- **自选列表**：搜索代码/名称添加，右键移出，拖动排序
+- **实时估值**：交易时段每 45 秒刷新，收盘后显示已公布净值；数字滚动更新
+- **自选列表**：搜索代码/名称添加，右键移出，拖动排序，侧栏宽度可拖
 - **历史净值**：近 1 月 / 3 月 / 6 月 / 1 年，鼠标划过读数
 - **今日收益**：填了份额和成本价后，状态栏显示当日收益，面板显示累计收益
 - **状态栏**：左键开面板，右键出菜单（含每只基金的涨跌）
+- **设置窗口**（`Cmd+,`）：登录时自动启动、清空缓存、打开数据目录
+- **毛玻璃侧栏**：`VibrancySidebar` 材质，跟随桌面壁纸；深色模式自动适配
 
 ## 数据来源
 
@@ -78,7 +83,7 @@ go tool mygo build -platform darwin/universal   # 出 .app 和 dmg
 open build/darwin-universal/FundBar.app
 ```
 
-产物在 `build/darwin-universal/`：`FundBar.app`（24 MB，arm64 + x86_64 通用二进制）和 `fundbar-0.1.0.dmg`（8 MB）。
+产物在 `build/darwin-universal/`：`FundBar.app`（24 MB，arm64 + x86_64 通用二进制）和 `fundbar-0.2.0.dmg`（8 MB）。
 
 自选基金存在 `~/Library/Application Support/FundBar/funds.json`，抓到的数据缓存在同目录 `cache/`，删掉即可重来。
 
@@ -109,7 +114,7 @@ CI 已经预留了这条路：在仓库 Secrets 里放 `MACOS_SIGNING_IDENTITY`�
 5. 打 `v*` tag 时自动建一个 draft Release，附上 dmg
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 ## 开发
@@ -119,7 +124,9 @@ go test ./...                          # 单元测试（估值算法、接口解
 go tool mygo vet .                     # 检查 native UI 的构建生命周期
 go tool mygo build -debug              # 保留开发特性
 go run ./tools/probe 161725 005827     # 对比估算值和公布净值
-go run ./tools/shot /tmp/shot.png      # 不开窗口，把界面渲染成 PNG（可加 dark）
+go run ./tools/shot /tmp/shot.png      # 不开窗口，把界面渲染成 PNG
+                                       # 参数：dark | settings | edit | search | empty
+FUNDBAR_DIR=/tmp/preview FUNDBAR_W=900 go run ./tools/shot /tmp/narrow.png
 go run ./tools/genicon                 # 重新生成 resources/ 下的图标
 ```
 

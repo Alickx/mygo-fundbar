@@ -115,6 +115,8 @@ func (a *App) TrayMenu() *mygo.Menu {
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.refresh() }},
 		&mygo.MenuItem{Label: "打开面板", Accelerator: "CmdOrCtrl+Shift+O",
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.Show() }},
+		&mygo.MenuItem{Label: "设置…",
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.OpenSettings() }},
 		mygo.Separator(),
 		&mygo.MenuItem{Label: "退出", Role: mygo.RoleQuit},
 	)

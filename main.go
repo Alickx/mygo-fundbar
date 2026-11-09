@@ -29,22 +29,39 @@ func main() {
 		// A menu bar app: no Dock icon.
 		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 		mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-			{Role: mygo.RoleAppMenu},
-			{Role: mygo.RoleEditMenu},
-			{Role: mygo.RoleWindowMenu},
+			{Label: "FundBar", Submenu: []*mygo.MenuItem{
+				{Label: "关于 FundBar", Role: mygo.RoleAbout},
+				mygo.Separator(),
+				{Label: "设置…", Accelerator: "Cmd+,",
+					Click: func(*mygo.MenuItem, *mygo.Window) { a.OpenSettings() }},
+				mygo.Separator(),
+				{Label: "隐藏 FundBar", Role: mygo.RoleHide},
+				{Label: "隐藏其他", Role: mygo.RoleHideOthers},
+				mygo.Separator(),
+				{Label: "退出 FundBar", Accelerator: "Cmd+Q", Role: mygo.RoleQuit},
+			}},
+			{Label: "编辑", Role: mygo.RoleEditMenu},
+			{Label: "窗口", Submenu: []*mygo.MenuItem{
+				{Label: "最小化", Role: mygo.RoleMinimize},
+				{Label: "关闭窗口", Role: mygo.RoleClose},
+				{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) {
+					a.OpenSettings()
+				}},
+			}},
 		}))
 
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "基金估值",
 			Width:     1080,
-			Height:    780,
+			Height:    840,
 			MinWidth:  900,
 			MinHeight: 600,
 			StateKey:  "main",
 			// The view draws the whole window; the window controls float
-			// over its top left corner.
+			// over its top left corner, on a frosted sidebar.
 			TitleBarStyle:        mygo.TitleBarHidden,
 			TrafficLightPosition: &mygo.Point{X: 18, Y: 18},
+			Vibrancy:             mygo.VibrancySidebar,
 			Content:              ui.View(a.View),
 		})
 

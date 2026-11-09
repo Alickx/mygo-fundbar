@@ -66,22 +66,23 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	ui.Column(c).Gap(10).Padding(13, 15).Radius(14).
 		Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-			ui.Text(c, "净值走势").FontSize(12.5).FontWeight(600)
+			ui.Text(c, "净值走势").FontSize(13).FontWeight(600)
 			if len(navs) > 1 {
-				info := periods[a.period].label + " " + pct(change)
+				info := periods[a.period].label + "净值变化 " + pct(change)
 				if a.pick >= 0 && a.pick < len(navs) {
 					n := navs[a.pick]
-					info = fmt.Sprintf("%s · 净值 %.4f · %s", n.Date, n.Unit, pct(n.Pct))
+					info = fmt.Sprintf("%s · 净值 %.4f · 当日 %s",
+						n.Date, n.Unit, pct(n.Pct))
 				}
-				ui.Text(c, info).FontSize(10.5).TextColor(up(t, change)).
-					FontFeatures("tnum").NoWrap()
+				ui.Text(c, info).FontSize(11.5).
+					TextColor(up(t, change)).FontFeatures("tnum").NoWrap()
 			}
 			ui.Spacer(c)
 			ui.Segmented(c, &a.period, "近1月", "近3月", "近6月", "近1年").
 				OnChange(func() { a.pick = -1 })
 		})
 		if len(navs) < 2 {
-			ui.Column(c).Height(176).Center().Children(func() {
+			ui.Column(c).Height(164).Center().Children(func() {
 				ui.Text(c, "还没有足够的历史净值").FontSize(11.5).TextColor(t.TextMuted)
 			})
 			return
@@ -120,8 +121,15 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, color ui.Color)
 		ys[i] = y.At(nav.Unit)
 	}
 	xt := chart.NewTime(t0, t1)
+	// The months read as the rest of the window does.
+	xt.Format = func(at time.Time) string {
+		if at.Day() == 1 {
+			return fmt.Sprintf("%d月", int(at.Month()))
+		}
+		return fmt.Sprintf("%d月%d日", int(at.Month()), at.Day())
+	}
 	label := func(_ chart.Side, tick chart.Tick) {
-		ui.Text(c, tick.Label).NoWrap().FontSize(10).TextColor(t.TextMuted).
+		ui.Text(c, tick.Label).NoWrap().FontSize(10.5).TextColor(t.TextMuted).
 			FontFeatures("tnum")
 	}
 
@@ -149,5 +157,5 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, color ui.Color)
 				chart.Point(c, xs[a.pick], ys[a.pick], 9, 9).
 					Radius(4.5).Background(color)
 			}
-		}).Height(176).Gap(6).Label("净值走势")
+		}).Height(164).Gap(6).Label("净值走势")
 }

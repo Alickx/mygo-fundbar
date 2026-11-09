@@ -161,6 +161,17 @@ type App struct {
 	pick   int
 	query  string
 
+	// sidebarWidth is how wide the user made the list of funds, and
+	// savedSidebar what the file has.
+	sidebarWidth float32
+	savedSidebar float32
+	// editing unfolds the fields of the shares held.
+	editing bool
+	// settings is the settings window, while it is open.
+	settings     *mygo.Window
+	settingsErr  string
+	previewLogin bool
+
 	hits      []source.Hit
 	searching bool
 	searchID  int
@@ -220,6 +231,10 @@ func (a *App) Load() {
 		}
 	}
 	a.period = data.Period
+	a.sidebarWidth = data.SidebarWidth
+	if a.sidebarWidth == 0 {
+		a.sidebarWidth = 348
+	}
 	if len(a.funds) == 0 {
 		a.sel = -1
 	} else if a.sel >= len(a.funds) {
@@ -254,7 +269,7 @@ func (a *App) estimate(f *Fund, quotes map[string]model.Quote) {
 
 // save writes the funds the user follows.
 func (a *App) save() {
-	data := &store.Data{Period: a.period}
+	data := &store.Data{Period: a.period, SidebarWidth: a.sidebarWidth}
 	for _, f := range a.funds {
 		data.Funds = append(data.Funds, store.Entry{
 			Code: f.Code, Type: f.Type, Shares: f.Shares, Cost: f.Cost,
@@ -455,6 +470,10 @@ func (a *App) loop() {
 			}
 			if since > 15*time.Minute {
 				a.refresh()
+			}
+			if a.savedSidebar != a.sidebarWidth {
+				a.save()
+				a.savedSidebar = a.sidebarWidth
 			}
 		})
 	}

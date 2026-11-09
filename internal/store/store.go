@@ -31,6 +31,8 @@ type Data struct {
 	Funds    []Entry `json:"funds"`
 	Selected string  `json:"selected,omitempty"`
 	Period   int     `json:"period,omitempty"`
+	// SidebarWidth is how wide the user made the list of funds.
+	SidebarWidth float32 `json:"sidebarWidth,omitempty"`
 }
 
 // Load reads the file, and an empty state when there is none.

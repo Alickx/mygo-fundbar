@@ -5,6 +5,7 @@
 package main
 
 import (
+	"fmt"
 	"image/png"
 	"log"
 	"os"
@@ -19,7 +20,13 @@ import (
 func main() {
 	out := "/tmp/fundbar.png"
 	dark := false
-	width, height := 1080, 780
+	width, height := 1080, 840
+	if v := os.Getenv("FUNDBAR_W"); v != "" {
+		fmt.Sscan(v, &width)
+	}
+	if v := os.Getenv("FUNDBAR_H"); v != "" {
+		fmt.Sscan(v, &height)
+	}
 	if len(os.Args) > 1 {
 		out = os.Args[1]
 	}
@@ -44,6 +51,23 @@ func main() {
 				{Code: "012414", Name: "招商中证白酒指数(LOF)C", Type: "指数型-股票"},
 				{Code: "0124142", Name: "鹏华酒指数A", Type: "指数型-股票"},
 			})
+		case "settings":
+			tester := ui.NewTesterWith(a.PreviewSettings, 480, 430,
+				ui.TesterOptions{Dark: dark})
+			tester.Frame()
+			img := tester.Image()
+			f, err := os.Create(out)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer f.Close()
+			if err := png.Encode(f, img); err != nil {
+				log.Fatal(err)
+			}
+			return
+		case "edit":
+			a.PreviewEdit(true)
+			a.PreviewLogin(true)
 		case "empty":
 			a = app.New(filepath.Join(os.TempDir(), "fundbar-empty"))
 			a.Load()
