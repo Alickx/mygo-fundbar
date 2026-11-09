@@ -63,23 +63,28 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 		a.pick = -1
 	}
 
-	ui.Column(c).Gap(10).Padding(13, 15).Radius(14).
-		Background(t.Surface).Border(1, t.Border).Children(func() {
+	card(c, t).Gap(8).Children(func() {
+		// The readout has its own line: selecting a date never pushes the
+		// period controls out of the card or changes the plot's position.
 		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-			ui.Text(c, "净值走势").FontSize(13).FontWeight(600)
+			ui.Text(c, "净值走势").FontSize(13).FontWeight(600).NoWrap().Shrink(0)
+			ui.Spacer(c)
+			ui.Segmented(c, &a.period, "近1月", "近3月", "近6月", "近1年").Shrink(0).
+				OnChange(func() { a.pick = -1 })
+		})
+		ui.Row(c).Height(18).AlignItems(ui.Center).Children(func() {
 			if len(navs) > 1 {
 				info := periods[a.period].label + "净值变化 " + pct(change)
+				color := up(t, change)
 				if a.pick >= 0 && a.pick < len(navs) {
 					n := navs[a.pick]
 					info = fmt.Sprintf("%s · 净值 %.4f · 当日 %s",
 						n.Date, n.Unit, pct(n.Pct))
+					color = up(t, n.Pct)
 				}
 				ui.Text(c, info).FontSize(11.5).
-					TextColor(up(t, change)).FontFeatures("tnum").NoWrap()
+					TextColor(color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(info)
 			}
-			ui.Spacer(c)
-			ui.Segmented(c, &a.period, "近1月", "近3月", "近6月", "近1年").
-				OnChange(func() { a.pick = -1 })
 		})
 		if len(navs) < 2 {
 			ui.Column(c).Height(164).Center().Children(func() {

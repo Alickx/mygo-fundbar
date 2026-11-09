@@ -43,18 +43,18 @@ func (a *App) settingsView(c *ui.Context) {
 			box := card(c, t)
 			box.Gap(10).Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Gap(14).Children(func() {
-					ui.Column(c).Grow(1).Gap(3).Children(func() {
+					ui.Column(c).Grow(1).Basis(0).Gap(3).Children(func() {
 						ui.Text(c, "登录时自动启动").FontSize(13)
 						ui.Text(c, "登录后直接待在菜单栏，不打开窗口").
 							FontSize(11.5).TextColor(t.TextMuted)
 					})
-					if ui.Switch(c, &openAtLogin).Changed() {
+					if ui.Switch(c, &openAtLogin).Shrink(0).Changed() {
 						a.openAtLogin(openAtLogin)
 					}
 				})
 				if a.settingsErr != "" {
 					ui.Text(c, a.settingsErr).FontSize(11.5).
-						TextColor(t.Danger).NoWrap()
+						TextColor(t.Danger)
 				}
 			})
 		})
@@ -64,22 +64,22 @@ func (a *App) settingsView(c *ui.Context) {
 			box := card(c, t)
 			box.Gap(10).Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Gap(14).Children(func() {
-					ui.Column(c).Grow(1).Gap(3).Children(func() {
+					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(3).Children(func() {
 						ui.Text(c, "缓存").FontSize(13)
 						ui.Text(c, "历史净值和重仓股存在本地，每次启动先读缓存").
 							FontSize(11.5).TextColor(t.TextMuted)
 					})
-					if ui.Button(c, "清空并刷新").Clicked() {
+					if ui.Button(c, "清空并刷新").Shrink(0).Clicked() {
 						a.clearCache()
 					}
 				})
 				ui.Row(c).AlignItems(ui.Center).Gap(14).Children(func() {
-					ui.Column(c).Grow(1).Gap(3).Children(func() {
+					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(3).Children(func() {
 						ui.Text(c, "自选基金").FontSize(13)
 						ui.Text(c, a.dir).FontSize(11.5).TextColor(t.TextMuted).
-							NoWrap()
+							SingleLine().Ellipsis("…").Tooltip(a.dir)
 					})
-					if ui.Button(c, "打开文件夹").Clicked() {
+					if ui.Button(c, "打开文件夹").Shrink(0).Clicked() {
 						mygo.Shell.OpenPath(a.dir)
 					}
 				})

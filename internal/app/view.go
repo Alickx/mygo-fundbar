@@ -34,12 +34,18 @@ func (a *App) View(c *ui.Context) {
 		c.Root().Background(ui.Transparent)
 	}
 
+	// Clamp before building the split so even the first frame of a restored
+	// window leaves room for the detail pane. Input is applied after a frame.
+	w, _ := c.Size()
+	limit := max(float32(268), min(float32(460), w-553))
+	if a.sidebarWidth == 0 {
+		a.sidebarWidth = 348
+	}
+	a.sidebarWidth = min(max(a.sidebarWidth, 268), limit)
 	split := ui.Split(c, &a.sidebarWidth,
 		func() { a.sidebar(c, t, vibrant) },
 		func() { a.main(c, t) })
 	split.Fill().SplitReset(348)
-	// The panes keep a usable width, whatever the divider is dragged to.
-	a.sidebarWidth = min(max(a.sidebarWidth, 268), 460)
 }
 
 // theme is the window's look: the desktop's, with a softer canvas and cards.
@@ -172,8 +178,9 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, vibrant bool) {
 				note = a.failure
 			}
 			ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).
-				FontFeatures("tnum").NoWrap().Grow(1)
-			if ui.Button(c, "设置").Label("设置").
+				FontFeatures("tnum").SingleLine().Ellipsis("…").Grow(1).Basis(0).
+				Tooltip(note)
+			if ui.Button(c, "设置").Shrink(0).Label("设置").
 				Tooltip("通用设置，包括登录时启动").Clicked() {
 				a.OpenSettings()
 			}
@@ -200,19 +207,19 @@ func (a *App) searchResults(c *ui.Context, t *ui.Theme) {
 		}
 		r.Transition(ui.ElementTransition{Duration: 120 * time.Millisecond})
 		r.Children(func() {
-			ui.Column(c).Grow(1).Gap(2).Children(func() {
-				ui.Text(c, h.Name).FontSize(12.5).NoWrap()
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(2).Children(func() {
+				ui.Text(c, h.Name).FontSize(12.5).SingleLine().Ellipsis("…").Tooltip(h.Name)
 				sub := h.Code
 				if h.Type != "" {
 					sub += " · " + h.Type
 				}
-				ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).NoWrap()
+				ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
 			})
 			mark := "＋"
 			if followed {
 				mark = "已添加"
 			}
-			ui.Text(c, mark).FontSize(12).TextColor(t.Accent)
+			ui.Text(c, mark).FontSize(12).TextColor(t.Accent).NoWrap().Shrink(0)
 		})
 		if r.Clicked() {
 			a.Add(h)
@@ -235,8 +242,8 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 	bg, edge := ui.Transparent, ui.Transparent
 	tileBg := tint.Alpha(0.13)
 	if chosen {
-		bg = t.Surface.Mix(t.Accent, 0.14)
-		edge = t.Accent.Alpha(0.32)
+		bg = t.Surface.Mix(t.Accent, 0.10)
+		edge = t.Accent.Alpha(0.24)
 		tileBg = t.Surface.Mix(tint, 0.16)
 	}
 
@@ -250,7 +257,7 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 	})
 	r.Children(func() {
 		// The day's change, in a tile of its own color.
-		ui.Box(c).Size(50, 42).Radius(9).Background(tileBg).Center().Children(func() {
+		ui.Box(c).Size(50, 42).Shrink(0).Radius(9).Background(tileBg).Center().Children(func() {
 			text := "—"
 			if f.Loaded || f.HasEst {
 				text = pct(change)
@@ -259,13 +266,13 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 				FontFeatures("tnum").NoWrap()
 		})
 
-		ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
+		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(2).Children(func() {
 			name := f.Name
 			if name == "" {
 				name = f.Code
 			}
 			ui.Text(c, name).FontSize(13).FontWeight(500).SingleLine().
-				Ellipsis("…")
+				Ellipsis("…").TextColor(t.Text).Tooltip(name)
 			ui.Row(c).Gap(5).NoWrap().Children(func() {
 				ui.Text(c, f.Code).FontSize(11).TextColor(t.TextMuted).
 					FontFeatures("tnum")
@@ -321,49 +328,59 @@ func (a *App) main(c *ui.Context, t *ui.Theme) {
 
 func (a *App) summaryBar(c *ui.Context, t *ui.Theme) {
 	s := a.Summary()
-	ui.Row(c).Padding(16, 24, 14, 24).Gap(30).AlignItems(ui.Center).Children(func() {
-		ui.Column(c).Gap(3).Children(func() {
-			ui.Text(c, "今日收益").FontSize(11.5).TextColor(t.TextMuted)
-			ui.Row(c).Gap(8).AlignItems(ui.Baseline).Children(func() {
-				if s.Holding {
-					ui.Text(c, signedMoney(s.Profit)).FontSize(25).FontWeight(600).
-						TextColor(up(t, s.Profit)).FontFeatures("tnum").
-						ContentTransition(digits)
-					ui.Text(c, pct(s.Pct)).FontSize(12).TextColor(up(t, s.Pct)).
-						FontFeatures("tnum").ContentTransition(digits)
-				} else if len(a.funds) > 0 {
-					ui.Text(c, pct(s.Pct)).FontSize(25).FontWeight(600).
-						TextColor(up(t, s.Pct)).FontFeatures("tnum").
-						ContentTransition(digits)
-					ui.Text(c, "自选平均").FontSize(11.5).TextColor(t.TextMuted)
-				} else {
-					ui.Text(c, "还没有自选基金").FontSize(14).TextColor(t.TextMuted)
+	ui.Row(c).Padding(14, 24).Gap(18).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Grow(1).Basis(0).MinWidth(0).Wrap().Gap(18).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Shrink(0).Gap(3).Children(func() {
+				label := "今日收益"
+				if !s.Holding {
+					label = "自选平均涨跌"
 				}
-			})
-		})
-		if s.Holding {
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, "持仓市值").FontSize(11.5).TextColor(t.TextMuted)
-				ui.Text(c, money(s.Value)).FontSize(15).FontWeight(600).
-					FontFeatures("tnum")
-			})
-		}
-		if len(a.funds) > 0 {
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, "涨跌分布").FontSize(11.5).TextColor(t.TextMuted)
-				ui.Row(c).Gap(10).Children(func() {
-					ui.Textf(c, "涨 %d", s.Up).FontSize(12.5).TextColor(up(t, 1)).
-						FontFeatures("tnum")
-					ui.Textf(c, "跌 %d", s.Down).FontSize(12.5).TextColor(up(t, -1)).
-						FontFeatures("tnum")
+				ui.Text(c, label).FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+				ui.Row(c).Gap(8).AlignItems(ui.Baseline).Children(func() {
+					if s.Holding {
+						ui.Text(c, signedMoney(s.Profit)).FontSize(25).FontWeight(600).
+							TextColor(up(t, s.Profit)).FontFeatures("tnum").NoWrap().
+							ContentTransition(digits)
+						ui.Text(c, pct(s.Pct)).FontSize(12).TextColor(up(t, s.Pct)).
+							FontFeatures("tnum").NoWrap().ContentTransition(digits)
+					} else if len(a.funds) > 0 {
+						ui.Text(c, pct(s.Pct)).FontSize(25).FontWeight(600).
+							TextColor(up(t, s.Pct)).FontFeatures("tnum").NoWrap().
+							ContentTransition(digits)
+					} else {
+						ui.Text(c, "还没有自选基金").FontSize(14).TextColor(t.TextMuted)
+					}
 				})
 			})
-		}
-		ui.Spacer(c)
-		ui.Column(c).AlignItems(ui.End).Gap(6).Children(func() {
-			ui.Text(c, a.updatedText()).FontSize(11).TextColor(t.TextMuted).
-				FontFeatures("tnum")
-			if ui.Button(c, "刷新").Disabled(a.busy).Clicked() {
+			if s.Holding {
+				ui.Column(c).Shrink(0).Gap(4).Children(func() {
+					ui.Text(c, "持仓市值").FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+					ui.Text(c, money(s.Value)).FontSize(15).FontWeight(600).
+						FontFeatures("tnum").NoWrap()
+				})
+			}
+			if len(a.funds) > 0 {
+				ui.Column(c).Shrink(0).Gap(4).Children(func() {
+					ui.Text(c, "涨跌分布").FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+					ui.Row(c).Gap(10).Children(func() {
+						ui.Textf(c, "涨 %d", s.Up).FontSize(12.5).TextColor(up(t, 1)).
+							FontFeatures("tnum").NoWrap()
+						ui.Textf(c, "跌 %d", s.Down).FontSize(12.5).TextColor(up(t, -1)).
+							FontFeatures("tnum").NoWrap()
+					})
+				})
+			}
+		})
+		ui.Column(c).Shrink(0).AlignItems(ui.End).Gap(6).Children(func() {
+			note := "尚未更新"
+			if a.busy {
+				note = "更新中…"
+			} else if !a.updated.IsZero() {
+				note = a.updated.In(cst).Format("15:04 更新")
+			}
+			ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).
+				FontFeatures("tnum").NoWrap().Tooltip(a.updatedText())
+			if ui.Button(c, "刷新").Shrink(0).Disabled(a.busy).Clicked() {
 				a.refresh()
 			}
 		})
@@ -390,32 +407,43 @@ func (a *App) detailTitle(c *ui.Context, t *ui.Theme, f *Fund) {
 	if f.UsingEstimate() {
 		label, color, badgeBg = "盘中估算", t.Accent, t.Accent.Alpha(0.14)
 	}
-	ui.Row(c).AlignItems(ui.End).Children(func() {
-		ui.Column(c).Grow(1).Gap(6).Children(func() {
-			name := f.Name
-			if name == "" {
-				name = f.Code
-			}
-			ui.Text(c, name).FontSize(19).FontWeight(600).NoWrap()
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, f.Code).FontSize(11).TextColor(t.TextMuted).
-					FontFeatures("tnum").Padding(1, 6).Radius(5).
-					Background(t.SurfaceHover)
-				if f.Type != "" {
-					ui.Text(c, f.Type).FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+	_, hasNav := f.LastNav()
+	if !hasNav {
+		label = "等待净值"
+	}
+	ui.Column(c).Gap(9).Children(func() {
+		ui.Row(c).Gap(20).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(6).Children(func() {
+				name := f.Name
+				if name == "" {
+					name = f.Code
 				}
+				ui.Text(c, name).FontSize(19).FontWeight(600)
+				ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+					ui.Text(c, f.Code).FontSize(11).TextColor(t.TextMuted).
+						FontFeatures("tnum").Padding(1, 6).Radius(5).
+						Background(t.SurfaceHover)
+					if f.Type != "" {
+						ui.Text(c, f.Type).FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+					}
+				})
+			})
+			ui.Column(c).Shrink(0).AlignItems(ui.End).Gap(3).Children(func() {
+				ui.Text(c, "当日涨跌").FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+				value := "—"
+				if hasNav {
+					value = pct(change)
+				}
+				ui.Text(c, value).FontSize(28).FontWeight(600).NoWrap().
+					TextColor(up(t, change)).FontFeatures("tnum").
+					ContentTransition(digits)
 			})
 		})
-		ui.Column(c).AlignItems(ui.End).Gap(5).Children(func() {
-			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "当日涨跌").FontSize(11.5).TextColor(t.TextMuted)
-				pill(c, label, color, badgeBg)
-			})
-			ui.Text(c, pct(change)).FontSize(28).FontWeight(600).
-				TextColor(up(t, change)).FontFeatures("tnum").
-				ContentTransition(digits)
-			ui.Text(c, a.valueLine(f)).FontSize(11).TextColor(t.TextMuted).
-				FontFeatures("tnum")
+		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+			pill(c, label, color, badgeBg)
+			if note := a.valueLine(f); note != "" {
+				ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum")
+			}
 		})
 	})
 }
@@ -429,12 +457,18 @@ func (a *App) valueLine(f *Fund) string {
 		if !f.QuoteAt.IsZero() {
 			at = " · " + f.QuoteAt.In(cst).Format("15:04")
 		}
-		return fmt.Sprintf("估算净值 %.4f", f.EstNav()) + at
+		if f.Shares > 0 {
+			return fmt.Sprintf("估算净值 %.4f", f.EstNav()) + at
+		}
+		return f.QuoteAt.In(cst).Format("01-02 15:04")
 	}
 	if !ok {
 		return ""
 	}
-	line := fmt.Sprintf("单位净值 %.4f", last.Unit)
+	if f.Shares <= 0 {
+		return "净值日 " + last.Date
+	}
+	line := fmt.Sprintf("单位 %.4f", last.Unit)
 	if last.Acc > 0 {
 		line += fmt.Sprintf(" · 累计 %.4f", last.Acc)
 	}
@@ -491,7 +525,7 @@ func (a *App) stats(c *ui.Context, t *ui.Theme, f *Fund) {
 				Border(1, t.Border).Children(func() {
 				ui.Text(c, card.label).FontSize(11.5).TextColor(t.TextMuted)
 				ui.Text(c, card.value).FontSize(17).FontWeight(600).
-					TextColor(card.color).FontFeatures("tnum").NoWrap().
+					TextColor(card.color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(card.value).
 					ContentTransition(digits)
 				ui.Text(c, card.note).FontSize(11).TextColor(t.TextMuted).
 					FontFeatures("tnum").NoWrap()
@@ -510,20 +544,20 @@ func profitNote(f *Fund) string {
 
 func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	ui.Column(c).Gap(9).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "重仓股").FontSize(13).FontWeight(600)
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Wrap().Children(func() {
+			ui.Text(c, "重仓股").FontSize(13).FontWeight(600).NoWrap().Shrink(0)
 			if f.Report != "" {
 				ui.Text(c, "报告期 "+f.Report).FontSize(11.5).TextColor(t.TextMuted).
-					FontFeatures("tnum")
+					FontFeatures("tnum").NoWrap()
 			}
 			ui.Spacer(c)
 			if f.StockPosition > 0 {
 				ui.Textf(c, "股票仓位 %.1f%%", f.StockPosition).FontSize(11.5).
-					TextColor(t.TextMuted).FontFeatures("tnum")
+					TextColor(t.TextMuted).FontFeatures("tnum").NoWrap()
 			}
 			if f.HasEst {
 				ui.Textf(c, "覆盖 %.1f%%", f.Est.Cover).FontSize(11.5).
-					TextColor(t.TextMuted).FontFeatures("tnum").
+					TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
 					Tooltip("前十大重仓股合计占基金净值的比例，越高估值越准")
 			}
 		})
@@ -553,7 +587,7 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 					row.Background(t.Text.Alpha(0.035))
 				}
 				row.Children(func() {
-					ui.Text(c, h.Name).FontSize(12).Grow(1).NoWrap()
+					ui.Text(c, h.Name).FontSize(12).Grow(1).Basis(0).SingleLine().Ellipsis("…").Tooltip(h.Name)
 					ui.Textf(c, "%.2f%%", h.Weight).FontSize(11.5).
 						TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
 						Width(numW).TextAlign(ui.End)
@@ -570,22 +604,23 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 func (a *App) holdingSection(c *ui.Context, t *ui.Theme, f *Fund) {
 	holding := f.Shares > 0
 	body := card(c, t)
-	body.Padding(11, 15).Gap(11).Children(func() {
+	body.Padding(8, 15).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-			ui.Text(c, "我的持仓").FontSize(13).FontWeight(600)
+			ui.Text(c, "我的持仓").FontSize(12.5).FontWeight(600).NoWrap().Shrink(0)
+			note := "未录入"
 			switch {
-			case a.editing && holding:
-				ui.Text(c, "改完点「完成」").FontSize(11.5).TextColor(t.TextMuted)
+			case a.editing:
+				note = "修改自动保存"
 			case holding:
-				ui.Textf(c, "%s 份 · 成本价 %.4f", trim(f.Shares, 2), f.Cost).
-					FontSize(11.5).TextColor(t.TextMuted).FontFeatures("tnum")
+				note = fmt.Sprintf("%s 份 · 成本 %.4f", trim(f.Shares, 2), f.Cost)
 			}
-			ui.Spacer(c)
+			ui.Text(c, note).FontSize(11.5).TextColor(t.TextMuted).FontFeatures("tnum").
+				Grow(1).Basis(0).SingleLine().Ellipsis("…").Tooltip(note)
 			if a.editing {
-				if ui.PrimaryButton(c, "完成").Clicked() {
+				if ui.PrimaryButton(c, "完成").Shrink(0).Clicked() {
 					a.editing = false
 				}
-			} else if ui.Button(c, map[bool]string{true: "编辑持仓", false: "录入持仓"}[holding]).
+			} else if ui.Button(c, map[bool]string{true: "编辑持仓", false: "录入持仓"}[holding]).Shrink(0).
 				Clicked() {
 				a.editing = true
 			}
@@ -602,33 +637,29 @@ func (a *App) holdingSection(c *ui.Context, t *ui.Theme, f *Fund) {
 		form.Height(h)
 		if h > 1 {
 			form.Children(func() {
-				ui.Row(c).Gap(18).AlignItems(ui.End).Children(func() {
-					ui.Column(c).Gap(5).Width(200).Children(func() {
+				ui.Row(c).Padding(12, 0, 0, 0).Gap(18).AlignItems(ui.End).Children(func() {
+					ui.Column(c).Gap(5).Grow(1).Basis(0).Children(func() {
 						ui.Text(c, "持有份额").FontSize(11.5).TextColor(t.TextMuted)
 						if ui.NumberInput(c, &f.Shares, 0, 1e10, 100).
-							Changed() {
+							Label("持有份额输入").Changed() {
 							a.changed()
 						}
 					})
-					ui.Column(c).Gap(5).Width(160).Children(func() {
+					ui.Column(c).Gap(5).Grow(1).Basis(0).Children(func() {
 						ui.Text(c, "成本价").FontSize(11.5).TextColor(t.TextMuted)
 						if ui.NumberInput(c, &f.Cost, 0, 1e6, 0.0001).
-							Changed() {
+							Label("成本价输入").Changed() {
 							a.changed()
 						}
 					})
 				})
 			})
 		}
-		if !holding && !a.editing {
-			ui.Text(c, "填上持有份额和成本价，状态栏就会显示今天赚了多少").
-				FontSize(11.5).TextColor(t.TextMuted)
-		}
 	})
 }
 
 // holdingFormHeight is the room the fields take, which the section opens to.
-const holdingFormHeight = 62
+const holdingFormHeight = 74
 
 // trim writes a number with at most n decimals, and none that are zero.
 func trim(v float64, n int) string {
