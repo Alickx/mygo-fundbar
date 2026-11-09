@@ -113,13 +113,18 @@ func (a *App) loginItem() bool {
 	return mygo.App.OpenAtLogin()
 }
 
-// version is the app's, or the file's when drawn without a running app.
+// version is the app's, or the one the previews show when drawn without a
+// running app.
 func (a *App) version() string {
 	if !mygo.App.IsReady() {
-		return "0.1.0"
+		return previewVersion
 	}
 	return mygo.App.Version()
 }
+
+// previewVersion is what a window drawn without a running app shows, as
+// tools/shot draws one; mygo.json holds the version of a build.
+const previewVersion = "0.2.0"
 
 // openAtLogin starts the app at login, or stops it, as the user asked.
 func (a *App) openAtLogin(on bool) {
