@@ -13,7 +13,9 @@ concurrency:
 
 jobs:
   macos:
-    runs-on: macos-15
+    # An Intel runner: the app is pure Go, so it builds both architectures
+    # from either, and the arm64 runners queue far longer.
+    runs-on: macos-15-intel
     env:
       # Set these to sign and notarize the app for other Macs:
       #   gh secret set MACOS_SIGNING_IDENTITY   # "Developer ID Application: Your Name (TEAMID)"
