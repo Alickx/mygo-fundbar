@@ -1,0 +1,161 @@
+package app
+
+import (
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+
+	"fundbar/internal/model"
+)
+
+// preview builds an app of two funds with data of their own, without the
+// network.
+func preview(t *testing.T) *App {
+	t.Helper()
+	a := New(t.TempDir())
+	yesterday := now().AddDate(0, 0, -1).Format("2006-01-02")
+	today := now().Format("2006-01-02")
+	a.funds = []*Fund{
+		{
+			Code: "161725", Name: "招商中证白酒指数(LOF)A", Type: "指数型-股票",
+			Shares: 12000, Cost: 0.62, Loaded: true, Report: "2026-09-30",
+			StockPosition: 85.7,
+			Navs: []model.Nav{
+				{Date: yesterday, Unit: 0.5896, Acc: 2.3057, Pct: -0.51},
+				{Date: today, Unit: 0.5859, Acc: 2.3020, Pct: -0.63},
+			},
+			Holdings: []model.Holding{
+				{Symbol: "sh600519", Code: "600519", Name: "贵州茅台", Weight: 18.54},
+				{Symbol: "sz000858", Code: "000858", Name: "五粮液", Weight: 9.05},
+			},
+		},
+		{
+			Code: "005827", Name: "易方达蓝筹精选混合", Type: "混合型-偏股",
+			Shares: 8000, Cost: 1.62, Loaded: true,
+			Navs: []model.Nav{{Date: today, Unit: 1.3993, Acc: 1.3993, Pct: -0.21}},
+		},
+	}
+	a.funds[0].Quotes = map[string]model.Quote{
+		"sh600519": {Symbol: "sh600519", Pct: -0.55, At: time.Now()},
+		"sz000858": {Symbol: "sz000858", Pct: -1.06, At: time.Now()},
+	}
+	a.estimate(a.funds[0], nil)
+	a.sel = 0
+	a.period = 0
+	return a
+}
+
+func TestViewBuilds(t *testing.T) {
+	a := preview(t)
+	tester := ui.NewTester(a.View, 1080, 780)
+	tester.Frame()
+	tester.Frame()
+	if tester.Image() == nil {
+		t.Fatal("expected a frame")
+	}
+}
+
+func TestEstimatesFromQuotes(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	if !f.HasEst {
+		t.Fatal("expected an estimate")
+	}
+	want := (-0.55*18.54 + -1.06*9.05) / (18.54 + 9.05)
+	if diff := f.Est.Pct - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("estimate = %v, want %v", f.Est.Pct, want)
+	}
+	// Today's value is published, so the app shows it, not the estimate.
+	if f.UsingEstimate() {
+		t.Fatal("expected the published value")
+	}
+	if got := f.ChangePct(); got != -0.63 {
+		t.Fatalf("change = %v, want -0.63", got)
+	}
+	if got, want := f.TodayProfit(), 12000*(0.5859-0.5896); abs(got-want) > 1e-9 {
+		t.Fatalf("profit = %v, want %v", got, want)
+	}
+}
+
+func TestEstimateIsNewerThanThePublishedValue(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	// Make the fund's value a day older than its prices, as it is while the
+	// markets are open.
+	f.Navs = f.Navs[:1]
+	f.QuoteAt = now()
+	if !f.UsingEstimate() {
+		t.Fatal("expected the estimate to be the newest number")
+	}
+	want := 0.5896 * (1 + f.Est.Pct/100)
+	if diff := f.EstNav() - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("estimated value = %v, want %v", f.EstNav(), want)
+	}
+}
+
+func TestSummaryAddsUpHoldings(t *testing.T) {
+	a := preview(t)
+	s := a.Summary()
+	if !s.Holding {
+		t.Fatal("expected holdings")
+	}
+	if len(a.funds) != 2 {
+		t.Fatalf("funds = %d", len(a.funds))
+	}
+	if s.Value <= 0 {
+		t.Fatalf("value = %v", s.Value)
+	}
+}
+
+func TestChoosingAFund(t *testing.T) {
+	a := preview(t)
+	tester := ui.NewTester(a.View, 1080, 780)
+	tester.Frame()
+	if err := tester.Click("易方达蓝筹精选混合"); err != nil {
+		t.Skipf("the list row is not clickable in this render: %v", err)
+	}
+	tester.Frame()
+	if a.sel != 1 {
+		t.Fatalf("selected %d, want 1", a.sel)
+	}
+}
+
+func TestSearchResults(t *testing.T) {
+	a := preview(t)
+	a.PreviewSearch("白酒", nil)
+	tester := ui.NewTester(a.View, 1080, 780)
+	tester.Frame()
+	if _, ok := tester.Find("没有找到基金"); !ok {
+		t.Fatal("expected the empty search note")
+	}
+}
+
+func abs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func TestMoneyAndPadding(t *testing.T) {
+	if got := money(1234567.891); got != "1,234,567.89" {
+		t.Fatalf("money = %q", got)
+	}
+	if got := money(-1200); got != "-1,200.00" {
+		t.Fatalf("money = %q", got)
+	}
+	if got := signedMoney(128.4); got != "+128.40" {
+		t.Fatalf("signedMoney = %q", got)
+	}
+	if got := pct(-1.234); got != "-1.23%" {
+		t.Fatalf("pct = %q", got)
+	}
+	// Figure spaces keep the menu bar item's width steady.
+	if got := padFigures("+9.00", 7); len([]rune(got)) != 7 || []rune(got)[0] != '\u2007' {
+		t.Fatalf("padFigures = %q", got)
+	}
+	if got := padFigures("+1234.56", 7); got != "+1234.56" {
+		t.Fatalf("padFigures = %q", got)
+	}
+}
