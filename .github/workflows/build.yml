@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The draft release a tag makes is written with the workflow's token.
+permissions:
+  contents: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
