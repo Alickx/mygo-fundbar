@@ -1,6 +1,15 @@
 {
   "name": "FundBar",
+  "slug": "fundbar",
   "identifier": "app.fundbar.desktop",
   "version": "0.1.0",
-  "out": "build"
+  "license": "MIT",
+  "copyright": "© 2026 FundBar contributors",
+  "publisher": "FundBar contributors",
+  "out": "build",
+  "macos": {
+    "infoPlist": {
+      "LSUIElement": true
+    }
+  }
 }
