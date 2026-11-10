@@ -1,6 +1,11 @@
 package source
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"fundbar/internal/model"
+)
 
 func TestSymbol(t *testing.T) {
 	cases := map[string]string{
@@ -120,5 +125,45 @@ func TestParseSearch(t *testing.T) {
 	}
 	if hits[0].Code != "161725" || hits[0].Type != "指数型-股票" {
 		t.Fatalf("hit = %+v", hits[0])
+	}
+}
+
+// An answer of the net worth list, newest first, with a day the site has no
+// value for.
+const navListJSON = `{"Data":{"LSJZList":[
+{"FSRQ":"2026-11-10","DWJZ":"1.2447","LJJZ":"1.6485","JZZZL":"-0.16"},
+{"FSRQ":"2026-11-09","DWJZ":"1.2467","LJJZ":"1.6505","JZZZL":"0.04"},
+{"FSRQ":"2026-11-08","DWJZ":"","LJJZ":"","JZZZL":""}]}}`
+
+func TestParseNavList(t *testing.T) {
+	got := parseNavList([]byte(navListJSON), "2026-11-09")
+	if len(got) != 1 {
+		t.Fatalf("navs = %+v, want one newer than 2026-11-09", got)
+	}
+	want := model.Nav{Date: "2026-11-10", Unit: 1.2447, Acc: 1.6485, Pct: -0.16}
+	if got[0] != want {
+		t.Errorf("nav = %+v, want %+v", got[0], want)
+	}
+}
+
+func TestNavDue(t *testing.T) {
+	cases := []struct {
+		at   time.Time
+		want string
+	}{
+		// A weekday morning: yesterday's value is the newest.
+		{time.Date(2026, 11, 10, 9, 30, 0, 0, cst), "2026-11-09"},
+		// A weekday evening: the day's value is out.
+		{time.Date(2026, 11, 10, 21, 0, 0, 0, cst), "2026-11-10"},
+		// A Monday morning: Friday's value.
+		{time.Date(2026, 11, 9, 8, 0, 0, 0, cst), "2026-11-06"},
+		// The weekend: Friday's value.
+		{time.Date(2026, 11, 14, 12, 0, 0, 0, cst), "2026-11-13"},
+		{time.Date(2026, 11, 15, 12, 0, 0, 0, cst), "2026-11-13"},
+	}
+	for _, c := range cases {
+		if got := navDue(c.at); got != c.want {
+			t.Errorf("navDue(%s) = %s, want %s", c.at.Format(time.RFC3339), got, c.want)
+		}
 	}
 }

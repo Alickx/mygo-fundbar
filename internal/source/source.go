@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -22,11 +23,20 @@ import (
 // Client asks the endpoints. It is safe for concurrent use.
 type Client struct {
 	HTTP *http.Client
+
+	mu sync.Mutex
+	// navLists is when the net worth list was last asked about each fund:
+	// the list answers one fund at a time, and a fund needs it until its
+	// data script catches up.
+	navLists map[string]time.Time
 }
 
 func New() *Client {
 	return &Client{HTTP: &http.Client{Timeout: 20 * time.Second}}
 }
+
+// cst is the funds' own time, which their publications follow.
+var cst = time.FixedZone("CST", 8*60*60)
 
 var errNotFound = errors.New("source: not found")
 
@@ -73,7 +83,8 @@ func (c *Client) get(ctx context.Context, url, referer string) ([]byte, error) {
 const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
 // Fund reads a fund's name, net asset value history and holdings from its
-// page's data script.
+// page's data script, and any value the script has yet to catch up with from
+// the list of the fund's net worth.
 func (c *Client) Fund(ctx context.Context, code string) (*Fund, error) {
 	url := "https://fund.eastmoney.com/pingzhongdata/" + code + ".js"
 	body, err := c.get(ctx, url, "https://fund.eastmoney.com/"+code+".html")
@@ -128,6 +139,12 @@ func (c *Client) Fund(ctx context.Context, code string) (*Fund, error) {
 		return nil, errNotFound
 	}
 
+	// The data script is written once an evening and can lag behind the
+	// day's publication: the net worth list holds the value first.
+	if last, at := f.Navs[len(f.Navs)-1].Date, time.Now(); last < navDue(at) && c.navListDue(code, at) {
+		f.Navs = append(f.Navs, c.latestNavs(ctx, code, last)...)
+	}
+
 	if raw := jsArray(src, "Data_fundSharesPositions"); raw != "" {
 		var rows [][]float64
 		if json.Unmarshal([]byte(raw), &rows) == nil && len(rows) > 0 {
@@ -145,6 +162,100 @@ func (c *Client) Fund(ctx context.Context, code string) (*Fund, error) {
 		}
 	}
 	return f, nil
+}
+
+// navHour is the evening hour from which a fund's day's value is
+// published.
+const navHour = 19
+
+// navDue is the newest date whose net asset value should be published by
+// at: today from the evening on, and the previous weekday before that. A
+// fund publishes nothing on a holiday, and the list then simply holds no
+// newer value.
+func navDue(at time.Time) string {
+	at = at.In(cst)
+	day := at
+	switch at.Weekday() {
+	case time.Saturday:
+		day = at.AddDate(0, 0, -1)
+	case time.Sunday:
+		day = at.AddDate(0, 0, -2)
+	default:
+		// Before the evening's publication, yesterday's value is the newest.
+		if at.Hour() < navHour {
+			day = at.AddDate(0, 0, -1)
+		}
+	}
+	for day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
+		day = day.AddDate(0, 0, -1)
+	}
+	return day.Format("2006-01-02")
+}
+
+// navListEvery is how long to wait before asking the net worth list again
+// about a fund whose data script still lacks the day's value.
+const navListEvery = 30 * time.Minute
+
+// navListDue reports that the net worth list should be asked about a fund,
+// and records the asking.
+func (c *Client) navListDue(code string, at time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if last, ok := c.navLists[code]; ok && at.Before(last.Add(navListEvery)) {
+		return false
+	}
+	if c.navLists == nil {
+		c.navLists = make(map[string]time.Time)
+	}
+	c.navLists[code] = at
+	return true
+}
+
+// latestNavs reads a fund's net asset values newer than since from the list
+// of its net worth.
+func (c *Client) latestNavs(ctx context.Context, code, since string) []model.Nav {
+	url := "https://api.fund.eastmoney.com/f10/lsjz?fundCode=" + code +
+		"&pageIndex=1&pageSize=10"
+	body, err := c.get(ctx, url, "https://fundf10.eastmoney.com/jjjz_"+code+".html")
+	if err != nil {
+		return nil
+	}
+	return parseNavList(body, since)
+}
+
+// parseNavList reads the values of the net worth list newer than since,
+// oldest first. The numbers come as text, and a day without a change, as a
+// fund's first day, carries none.
+func parseNavList(body []byte, since string) []model.Nav {
+	var res struct {
+		Data struct {
+			Rows []struct {
+				Date string `json:"FSRQ"`
+				Unit string `json:"DWJZ"`
+				Acc  string `json:"LJJZ"`
+				Pct  string `json:"JZZZL"`
+			} `json:"LSJZList"`
+		} `json:"Data"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil
+	}
+	var out []model.Nav
+	for _, row := range res.Data.Rows {
+		date := strings.TrimSpace(row.Date)
+		if date <= since {
+			continue
+		}
+		unit, err := strconv.ParseFloat(strings.TrimSpace(row.Unit), 64)
+		if err != nil || unit <= 0 {
+			continue
+		}
+		acc, _ := strconv.ParseFloat(strings.TrimSpace(row.Acc), 64)
+		pct, _ := strconv.ParseFloat(strings.TrimSpace(row.Pct), 64)
+		out = append(out, model.Nav{Date: date, Unit: unit, Acc: acc, Pct: pct})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
+	return out
 }
 
 // Holdings reads the stocks of a fund's latest quarterly report, from the
