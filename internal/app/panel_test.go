@@ -3,8 +3,11 @@ package app
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"fundbar/internal/store"
 )
 
 // panelTester frames the preview the menu bar item opens.
@@ -67,5 +70,37 @@ func TestPreviewSaysWhenNothingIsFollowed(t *testing.T) {
 		if !tt.HasText(text) {
 			t.Fatalf("missing %q in %v", text, tt.Texts())
 		}
+	}
+}
+
+// A group lists other funds: its list slides in from the right, as one
+// page takes the place of another.
+func TestPreviewSlidesTheListOfANewGroup(t *testing.T) {
+	a := preview(t)
+	a.groups = []store.Group{{ID: "g1", Name: "关注"}}
+	a.funds[0].Groups = []string{holdingGroup, "g1"}
+	a.rebuildList()
+	tt := panelTester(a)
+	tt.Frame()
+	rest := requireBox(t, tt, "招商中证白酒指数(LOF)A")
+
+	a.SelectGroup("g1")
+	tt.Frame()
+	tt.Advance(60 * time.Millisecond)
+	moving := requireBox(t, tt, "招商中证白酒指数(LOF)A")
+	if moving.X <= rest.X {
+		t.Fatalf("the list did not slide in from the right: %v, then %v", rest.X, moving.X)
+	}
+	tt.Advance(300 * time.Millisecond)
+	if done := requireBox(t, tt, "招商中证白酒指数(LOF)A"); abs(float64(done.X-rest.X)) > 0.5 {
+		t.Fatalf("the list settled at %v, expected %v", done.X, rest.X)
+	}
+
+	// Back to the group on its left, which slides in from the left.
+	a.SelectGroup(holdingGroup)
+	tt.Frame()
+	tt.Advance(60 * time.Millisecond)
+	if back := requireBox(t, tt, "招商中证白酒指数(LOF)A"); back.X >= rest.X {
+		t.Fatalf("the list did not slide in from the left: %v, then %v", rest.X, back.X)
 	}
 }

@@ -67,7 +67,7 @@ FUNDBAR_GROUP=关注 go run ./tools/shot /tmp/fundbar-group.png light group
 go run ./tools/shot /tmp/fundbar-panel.png light panel
 ```
 
-参数顺序为：输出路径、主题（`light` / `dark`）、场景（`normal` / `settings` / `edit` / `search` / `empty` / `group` / `groupnew` / `panel`）、选中的基金代码。`group` 场景用 `FUNDBAR_GROUP` 指定要展示的分组名称。
+参数顺序为：输出路径、主题（`light` / `dark`）、场景（`normal` / `settings` / `edit` / `search` / `empty` / `group` / `groupnew` / `panel`）、选中的基金代码。`group` 场景用 `FUNDBAR_GROUP` 指定要展示的分组名称。`panel` 场景按系统毛玻璃渲染小窗，再铺一层灰色渐变作底，用来核对小窗在材质上的对比度。
 
 ```sh
 FUNDBAR_DIR=/tmp/fundbar-preview FUNDBAR_W=900 FUNDBAR_H=600 \

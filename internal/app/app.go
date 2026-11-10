@@ -174,6 +174,15 @@ type App struct {
 	// panel is the preview the menu bar item opened, or nil while it is
 	// closed: a popover goes as the user clicks elsewhere.
 	panel *mygo.Window
+	// panelShown is the group the preview listed last, and panelMoved when
+	// it started listing another, which its list slides in from the right.
+	// panelSeeded tells that the preview has drawn a frame since it opened.
+	panelShown  string
+	panelMoved  time.Time
+	panelSeeded bool
+	// panelDir is the side of the group bar the last group listed comes
+	// from, which its list slides in from.
+	panelDir float32
 
 	src    *source.Client
 	dir    string

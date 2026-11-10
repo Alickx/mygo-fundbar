@@ -6,6 +6,9 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
 	"image/png"
 	"log"
 	"os"
@@ -79,7 +82,11 @@ func main() {
 			tester := ui.NewTesterWith(a.Panel, 320, 560,
 				ui.TesterOptions{Dark: dark})
 			tester.Frame()
-			img := tester.Image()
+			// The preview draws no background of its own where the system's
+			// material shows; a grey stands in for what lies behind the
+			// menu bar, which is what the numbers have to read on.
+			tester.SetVibrancy(true)
+			img := over(trim(tester.Image(), 14), dark)
 			f, err := os.Create(out)
 			if err != nil {
 				log.Fatal(err)
@@ -107,4 +114,43 @@ func main() {
 	if err := png.Encode(f, img); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// trim takes the margin below a preview away, keeping pad rows of it.
+func trim(img *image.RGBA, pad int) *image.RGBA {
+	b := img.Bounds()
+	height := b.Max.Y
+	for y := b.Max.Y - 1; y >= b.Min.Y && height == b.Max.Y; y-- {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if img.RGBAAt(x, y).A > 0 {
+				height = min(y+1+pad, b.Max.Y)
+				break
+			}
+		}
+	}
+	return img.SubImage(image.Rect(b.Min.X, b.Min.Y, b.Max.X, height)).(*image.RGBA)
+}
+
+// over draws img on the grey the menu bar's material leaves under a
+// preview: a light one in the dark appearance, a bright one in the light.
+func over(img *image.RGBA, dark bool) *image.RGBA {
+	b := img.Bounds()
+	top, bottom := color.RGBA{0x3c, 0x3c, 0x44, 0xff}, color.RGBA{0x74, 0x74, 0x7c, 0xff}
+	if !dark {
+		top, bottom = color.RGBA{0xda, 0xda, 0xe2, 0xff}, color.RGBA{0xf4, 0xf4, 0xf8, 0xff}
+	}
+	out := image.NewRGBA(b)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		t := float32(y-b.Min.Y) / float32(max(b.Dy()-1, 1))
+		c := color.RGBA{
+			R: uint8(float32(top.R)*(1-t) + float32(bottom.R)*t),
+			G: uint8(float32(top.G)*(1-t) + float32(bottom.G)*t),
+			B: uint8(float32(top.B)*(1-t) + float32(bottom.B)*t),
+			A: 0xff,
+		}
+		draw.Draw(out, image.Rect(b.Min.X, y, b.Max.X, y+1),
+			&image.Uniform{c}, image.Point{}, draw.Src)
+	}
+	draw.Draw(out, b, img, b.Min, draw.Over)
+	return out
 }

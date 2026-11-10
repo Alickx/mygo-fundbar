@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"github.com/egoist/mygo"
 
 	"github.com/egoist/mygo/ui"
@@ -14,17 +16,22 @@ func (a *App) Attach(win *mygo.Window, tray *mygo.Tray) {
 	a.updateTray()
 }
 
-// showPanel makes the preview beside the menu bar icon and opens it. The
-// system closes a popover as the user clicks elsewhere, and keeps none to
-// open again, so each click makes a new one.
+// showPanel makes the preview beside the menu bar icon and opens it. A
+// click elsewhere closes it, and keeps none to open again, so each click
+// makes a new one.
 func (a *App) showPanel() {
 	if a.tray == nil {
 		a.Show()
 		return
 	}
 	// The funds decide how tall it is, at a width that stays the same as
-	// the numbers change; the group bar takes a row of its own.
-	height := 184 + 42*min(len(a.funds), panelRows)
+	// the numbers change; the group bar takes a row of its own, and an
+	// empty preview says so in two lines. These are the heights its
+	// content takes, so that it shows at its size and stays there.
+	height := 168 + 43*min(len(a.funds), panelRows)
+	if len(a.funds) == 0 {
+		height = 200
+	}
 	p := mygo.NewFlyout(mygo.FlyoutOptions{
 		Tray:      a.tray,
 		Placement: mygo.PlacementBottom,
@@ -39,11 +46,21 @@ func (a *App) showPanel() {
 		MaxHeight:  620,
 		Focusable:  true,
 		Shadow:     true,
-		Popover:    true,
-		Hidden:     true,
-		Content:    ui.View(a.Panel),
+		// The system's popover draws the material, the corners and the
+		// arrow that points at the icon, but it also moves itself as its
+		// content changes size: a switch of groups glides the list to a
+		// new height, and the popover would shake it there. A flyout of
+		// the app's own keeps the popover's material, and keeps still.
+		Vibrancy:     mygo.VibrancyPopover,
+		CornerRadius: panelRadius,
+		Hidden:       true,
+		Content:      ui.View(a.Panel),
 	})
 	a.panel = p
+	// A preview that opens takes the group it lists, rather than sliding
+	// in from one it listed before.
+	a.panelSeeded = false
+	a.panelMoved = time.Time{}
 	p.OnClosed(func() {
 		if a.panel == p {
 			a.panel = nil
