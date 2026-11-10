@@ -396,12 +396,7 @@ func (a *App) summaryBar(c *ui.Context, t *ui.Theme) {
 			}
 		})
 		ui.Column(c).Shrink(0).AlignItems(ui.End).Gap(6).Children(func() {
-			note := "尚未更新"
-			if a.busy {
-				note = "更新中…"
-			} else if !a.updated.IsZero() {
-				note = a.updated.In(cst).Format("15:04 更新")
-			}
+			note := a.freshNote()
 			ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).
 				FontFeatures("tnum").NoWrap().Tooltip(a.updatedText())
 			if ui.Button(c, "刷新").Shrink(0).Disabled(a.busy).Clicked() {
@@ -409,6 +404,17 @@ func (a *App) summaryBar(c *ui.Context, t *ui.Theme) {
 			}
 		})
 	})
+}
+
+// freshNote is how old the numbers are, in a word.
+func (a *App) freshNote() string {
+	switch {
+	case a.busy:
+		return "更新中…"
+	case a.updated.IsZero():
+		return "尚未更新"
+	}
+	return a.updated.In(cst).Format("15:04 更新")
 }
 
 func (a *App) updatedText() string {

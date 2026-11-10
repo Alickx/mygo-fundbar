@@ -2,13 +2,81 @@ package app
 
 import (
 	"github.com/egoist/mygo"
+
+	"github.com/egoist/mygo/ui"
 )
 
-// Attach gives the app its window and its item in the menu bar.
+// Attach gives the app its window and its item in the menu bar: the item
+// opens a preview of the funds, and the window shows them in full.
 func (a *App) Attach(win *mygo.Window, tray *mygo.Tray) {
 	a.win = win
 	a.tray = tray
 	a.updateTray()
+}
+
+// showPanel makes the preview beside the menu bar icon and opens it. The
+// system closes a popover as the user clicks elsewhere, and keeps none to
+// open again, so each click makes a new one.
+func (a *App) showPanel() {
+	if a.tray == nil {
+		a.Show()
+		return
+	}
+	// The funds decide how tall it is, at a width that stays the same as
+	// the numbers change.
+	height := 150 + 42*min(len(a.funds), panelRows)
+	p := mygo.NewFlyout(mygo.FlyoutOptions{
+		Tray:      a.tray,
+		Placement: mygo.PlacementBottom,
+		Gap:       4,
+		// Width and Height are what it shows at before the frame that
+		// measures the funds; FitContent takes over from there.
+		Width:      320,
+		Height:     height,
+		FitContent: true,
+		MinWidth:   320,
+		MaxWidth:   320,
+		MaxHeight:  560,
+		Focusable:  true,
+		Shadow:     true,
+		Popover:    true,
+		Hidden:     true,
+		Content:    ui.View(a.Panel),
+	})
+	a.panel = p
+	p.OnClosed(func() {
+		if a.panel == p {
+			a.panel = nil
+		}
+	})
+	p.Show()
+}
+
+// TogglePanel opens the preview beside the menu bar icon, or closes it.
+func (a *App) TogglePanel() {
+	if a.panel != nil {
+		a.panel.Close()
+		return
+	}
+	a.showPanel()
+}
+
+// afterFrame runs fn once the frame being built is done: a click in the
+// preview asks for the window, which closes the preview, and closing it
+// from inside its own frame would pull that frame from under the build.
+func (a *App) afterFrame(fn func()) {
+	if a.win == nil {
+		fn()
+		return
+	}
+	a.win.Update(fn)
+}
+
+// HidePanel takes the preview away, as a menu does.
+func (a *App) HidePanel() {
+	if a.panel != nil {
+		a.panel.Close()
+	}
 }
 
 // Show brings the window to the front, on the fund chosen.
@@ -16,6 +84,7 @@ func (a *App) Show() {
 	if a.win == nil {
 		return
 	}
+	a.HidePanel()
 	a.win.Show()
 	a.win.Focus()
 	a.win.Invalidate()
@@ -38,6 +107,14 @@ func (a *App) redraw() {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+	a.redrawPanel()
+}
+
+// redrawPanel shows numbers that changed while the preview was open.
+func (a *App) redrawPanel() {
+	if a.panel != nil {
+		a.panel.Invalidate()
+	}
 }
 
 // quit stops the app.
@@ -48,6 +125,7 @@ func quit() { mygo.App.Quit() }
 func (a *App) changed() {
 	a.save()
 	a.updateTray()
+	a.redrawPanel()
 }
 
 // removeAt takes a fund out of the list after the frame that asked.

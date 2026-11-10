@@ -87,9 +87,11 @@ func main() {
 			win.Hide()
 		})
 		if tray != nil {
-			// A click opens the panel; the menu waits on a right click.
-			tray.OnClick(a.Show)
+			// A click opens the preview beside the icon, which leads to the
+			// panel; the menu waits on a right click.
+			tray.OnClick(a.TogglePanel)
 			tray.OnRightClick(func() {
+				a.HidePanel()
 				tray.SetMenu(a.TrayMenu())
 				tray.PopUpMenu()
 				tray.SetMenu(nil)

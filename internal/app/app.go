@@ -151,8 +151,12 @@ func (f *Fund) TotalPct() float64 {
 
 // App is the state of the window and the menu bar item.
 type App struct {
-	win    *mygo.Window
-	tray   *mygo.Tray
+	win  *mygo.Window
+	tray *mygo.Tray
+	// panel is the preview the menu bar item opened, or nil while it is
+	// closed: a popover goes as the user clicks elsewhere.
+	panel *mygo.Window
+
 	src    *source.Client
 	dir    string
 	config string
@@ -402,6 +406,7 @@ func (a *App) refresh() {
 				a.failure = "行情获取失败：" + qerr.Error()
 			}
 			a.updateTray()
+			a.redrawPanel()
 		})
 	}()
 }
