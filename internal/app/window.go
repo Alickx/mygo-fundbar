@@ -23,8 +23,8 @@ func (a *App) showPanel() {
 		return
 	}
 	// The funds decide how tall it is, at a width that stays the same as
-	// the numbers change.
-	height := 150 + 42*min(len(a.funds), panelRows)
+	// the numbers change; the group bar takes a row of its own.
+	height := 184 + 42*min(len(a.funds), panelRows)
 	p := mygo.NewFlyout(mygo.FlyoutOptions{
 		Tray:      a.tray,
 		Placement: mygo.PlacementBottom,
@@ -36,7 +36,7 @@ func (a *App) showPanel() {
 		FitContent: true,
 		MinWidth:   320,
 		MaxWidth:   320,
-		MaxHeight:  560,
+		MaxHeight:  620,
 		Focusable:  true,
 		Shadow:     true,
 		Popover:    true,
@@ -131,6 +131,17 @@ func (a *App) changed() {
 // removeAt takes a fund out of the list after the frame that asked.
 func (a *App) removeAt(i int) { a.pendingRemove = i }
 
+// leaveAt takes a fund out of the group the list shows, after the frame that
+// asked.
+func (a *App) leaveAt(i int) { a.pendingLeave = i }
+
+// joinAt adds a fund of the list to another group, after the frame that
+// asked.
+func (a *App) joinAt(i int, group string) {
+	a.wantJoin = i
+	a.wantJoinGroup = group
+}
+
 // resolveWanted shows the fund the menu bar item chose.
 func (a *App) resolveWanted() {
 	if a.want == "" {
@@ -138,33 +149,33 @@ func (a *App) resolveWanted() {
 	}
 	code := a.want
 	a.want = ""
-	for i, f := range a.funds {
-		if f.Code == code {
-			a.sel = i
-			a.pick = -1
-			return
-		}
-	}
+	a.pickFund(code)
 }
 
 // TrayMenu is the menu of the item in the menu bar: the funds the user
 // follows, and what the app does.
 func (a *App) TrayMenu() *mygo.Menu {
 	s := a.Summary()
+	held := a.inGroup(holdingGroup)
 	var items []*mygo.MenuItem
 
 	headline := "还没有自选基金"
+	if len(a.all) > 0 && len(held) == 0 {
+		headline = "持有分组还没有基金"
+	}
 	switch {
 	case s.Holding:
 		headline = "今日收益 " + signedMoney(s.Profit) + "（" + pct(s.Pct) + "）"
-	case len(a.funds) > 0:
+	case len(held) > 0:
 		headline = "自选平均 " + pct(s.Pct)
 	}
 	items = append(items, &mygo.MenuItem{Label: headline, Disabled: true})
 
-	if len(a.funds) > 0 {
+	// The menu speaks for the holding group, as the menu bar item does,
+	// whatever group the window lists.
+	if len(held) > 0 {
 		items = append(items, mygo.Separator())
-		for i, f := range a.funds {
+		for i, f := range held {
 			if i >= 12 {
 				break
 			}

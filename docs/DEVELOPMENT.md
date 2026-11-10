@@ -63,9 +63,11 @@ go run ./tools/shot /tmp/fundbar-settings.png light settings
 go run ./tools/shot /tmp/fundbar-edit.png light edit
 go run ./tools/shot /tmp/fundbar-search.png light search
 go run ./tools/shot /tmp/fundbar-empty.png light empty
+FUNDBAR_GROUP=关注 go run ./tools/shot /tmp/fundbar-group.png light group
+go run ./tools/shot /tmp/fundbar-panel.png light panel
 ```
 
-参数顺序为：输出路径、主题（`light` / `dark`）、场景（`normal` / `settings` / `edit` / `search` / `empty`）、选中的基金代码。
+参数顺序为：输出路径、主题（`light` / `dark`）、场景（`normal` / `settings` / `edit` / `search` / `empty` / `group` / `groupnew` / `panel`）、选中的基金代码。`group` 场景用 `FUNDBAR_GROUP` 指定要展示的分组名称。
 
 ```sh
 FUNDBAR_DIR=/tmp/fundbar-preview FUNDBAR_W=900 FUNDBAR_H=600 \
@@ -105,7 +107,7 @@ mygo.json            应用元数据与打包配置
 
 | 文件 | 用途 |
 | --- | --- |
-| `funds.json` | 自选基金、份额、成本价、选中项及部分界面设置 |
+| `funds.json` | 自选基金、分组、份额、成本价、选中项及部分界面设置 |
 | `cache/<基金代码>.json` | 基金资料、历史净值、持仓与行情快照 |
 
 可在应用设置中打开数据目录或清空缓存。备份自选与手动持仓时，请保留 `funds.json`。
@@ -129,6 +131,6 @@ Apple 公证需要单独配置。使用 `xcrun notarytool store-credentials` 保
 2. 构建 macOS 通用应用与 DMG。
 3. 使用 `codesign --verify --deep --strict` 校验签名。
 4. 上传应用与安装包作为构建产物。
-5. 对 `v*` 标签创建附带 DMG 的 **草稿 Release**，供维护者检查后发布。
+5. 对 `v*` 标签创建附带 DMG 的 Release，直接发布。
 
 配置仓库 Secrets `MACOS_SIGNING_IDENTITY`、`MACOS_CERT_P12`（base64）和 `MACOS_CERT_PASSWORD` 后，CI 会导入证书并签名；未配置时使用 ad-hoc 签名。当前工作流没有配置公证凭据的执行步骤，发布公证版本时还需补齐该流程。

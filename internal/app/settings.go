@@ -124,7 +124,7 @@ func (a *App) version() string {
 
 // previewVersion is what a window drawn without a running app shows, as
 // tools/shot draws one; mygo.json holds the version of a build.
-const previewVersion = "0.2.0"
+const previewVersion = "0.3.0"
 
 // openAtLogin starts the app at login, or stops it, as the user asked.
 func (a *App) openAtLogin(on bool) {
@@ -141,7 +141,7 @@ func (a *App) openAtLogin(on bool) {
 
 // clearCache forgets what was read about the funds and asks again.
 func (a *App) clearCache() {
-	for _, f := range a.funds {
+	for _, f := range a.all {
 		store.DropSnapshot(a.dir, f.Code)
 		f.Loaded, f.HasEst = false, false
 		f.Holdings, f.Quotes, f.Navs = nil, nil, nil

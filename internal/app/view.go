@@ -17,17 +17,19 @@ func (a *App) View(c *ui.Context) {
 	c.SetTheme(t)
 
 	// Work a menu asked for, done before the frame is built.
-	if a.pendingRemove >= 0 {
-		a.Remove(a.pendingRemove)
-		a.pendingRemove = -1
-	}
+	a.applyPending()
 	a.resolveWanted()
 
 	c.OnShortcut(ui.Cmd, ui.KeyW, a.Hide)
 	c.OnShortcut(ui.Cmd, ui.KeyQ, quit)
 	c.OnShortcut(ui.Cmd, ui.KeyR, a.refresh)
-	if c.Shortcut(0, ui.KeyEscape) && a.query != "" {
-		a.query, a.hits = "", nil
+	if c.Shortcut(0, ui.KeyEscape) {
+		switch {
+		case a.groupEditing:
+			a.cancelGroupEdit()
+		case a.query != "":
+			a.query, a.hits = "", nil
+		}
 	}
 
 	// The sidebar is frosted glass: what is behind the window shows through
@@ -136,6 +138,10 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, vibrant bool) {
 			}
 		})
 
+		ui.Column(c).Padding(0, 14, 8, 14).Children(func() {
+			a.groupBar(c, t, a.sidebarWidth-28)
+		})
+
 		ui.Column(c).Padding(0, 14, 10, 14).Children(func() {
 			if f := ui.SearchField(c, &a.query).Placeholder("搜索代码或名称"); f.Changed() {
 				a.searchDue = time.Now().Add(280 * time.Millisecond)
@@ -157,10 +163,15 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, vibrant bool) {
 				return
 			}
 			if len(a.funds) == 0 {
+				emptyTitle, emptyNote := "还没有自选基金", "在上面搜索代码或名称"
+				if a.group != holdingGroup {
+					emptyTitle = "「" + a.groupName(a.group) + "」还没有基金"
+					emptyNote = "搜索代码或名称，加入这个分组"
+				}
 				ui.Column(c).Fill().Center().Gap(6).Padding(20).Children(func() {
-					ui.Text(c, "还没有自选基金").FontSize(13).FontWeight(500)
-					ui.Text(c, "在上面搜索代码或名称").FontSize(11.5).
-						TextColor(t.TextMuted)
+					ui.Text(c, emptyTitle).FontSize(13).FontWeight(500).
+						SingleLine().Ellipsis("…").Tooltip(emptyTitle)
+					ui.Text(c, emptyNote).FontSize(11.5).TextColor(t.TextMuted)
 				})
 				return
 			}
@@ -202,6 +213,245 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, vibrant bool) {
 	})
 }
 
+// groupBar switches the list between the holding group and the groups the
+// user made, and makes and renames them. The window and the preview of the
+// menu bar item draw the same bar.
+//
+// room is how wide the bar may be: the groups that fit show as chips, and
+// the rest wait in a menu at their end, so that the group the windows list
+// stays in sight however many groups there are.
+func (a *App) groupBar(c *ui.Context, t *ui.Theme, room float32) {
+	shown, rest := a.groupFit(c, room)
+	ui.Column(c).Gap(6).Children(func() {
+		ui.Row(c).Gap(groupAddGap).AlignItems(ui.Center).Children(func() {
+			ui.ScrollHorizontal(c).Grow(1).Basis(0).Children(func() {
+				ui.Row(c).Gap(groupChipGap).AlignItems(ui.Center).Children(func() {
+					for _, id := range shown {
+						a.groupChip(c, t, id)
+					}
+					if len(rest) > 0 {
+						a.groupMore(c, t, rest)
+					}
+				})
+			})
+			add := ui.Row(c.Key("group-new")).Padding(3, 8).Radius(999).
+				Border(1, t.Border).Background(t.SurfaceHover).Shrink(0).
+				Cursor(ui.CursorPointer).Tooltip("新建分组")
+			if add.Hovered() {
+				add.Background(t.SurfacePressed)
+			}
+			add.Children(func() {
+				ui.Text(c, "＋").FontSize(groupChipFont).FontWeight(600).
+					TextColor(t.TextMuted).NoWrap()
+			})
+			if add.Clicked() {
+				a.beginNewGroup()
+			}
+		})
+		if a.groupEditing {
+			ui.Column(c).Gap(4).Children(func() {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					in := ui.TextInput(c, &a.groupDraft).Placeholder("分组名称").
+						AutoFocus().Grow(1).Basis(0).MinWidth(0)
+					if in.Submitted() {
+						a.CommitGroup()
+					}
+					if ui.PrimaryButton(c, "确定").Shrink(0).Clicked() {
+						a.CommitGroup()
+					}
+					if ui.Button(c, "取消").Shrink(0).Clicked() {
+						a.cancelGroupEdit()
+					}
+				})
+				if a.groupErr != "" {
+					ui.Text(c, a.groupErr).FontSize(10.5).TextColor(t.Danger).
+						NoWrap().SingleLine().Ellipsis("…")
+				}
+			})
+		}
+	})
+}
+
+// The group bar's sizes, which decide how many chips fit in its room.
+const (
+	groupChipFont = 11.5
+	groupChipGap  = 5
+	groupAddGap   = 6
+	// groupChipExtra is a chip's padding and hairline border, beside its
+	// text; groupAddExtra is the same for the button that makes a group.
+	groupChipExtra = 20
+	groupAddExtra  = 18
+)
+
+// groupFit puts as many groups as fit in room into chips, and the rest, in
+// order, into the menu: the group the windows list is always one of the
+// chips.
+func (a *App) groupFit(c *ui.Context, room float32) (shown, rest []string) {
+	ids := make([]string, 0, len(a.groups)+1)
+	ids = append(ids, holdingGroup)
+	for _, g := range a.groups {
+		ids = append(ids, g.ID)
+	}
+	width := make(map[string]float32, len(ids))
+	for _, id := range ids {
+		width[id] = chipWidth(c, a.groupName(id), groupChipFont, 500, groupChipExtra)
+	}
+	room -= chipWidth(c, "＋", groupChipFont, 600, groupAddExtra) + groupAddGap
+	if room < 0 {
+		room = 0
+	}
+
+	fit := func(ids []string, room float32) []string {
+		var out []string
+		used := float32(0)
+		for i, id := range ids {
+			need := width[id]
+			if i > 0 {
+				need += groupChipGap
+			}
+			if used+need > room {
+				break
+			}
+			used += need
+			out = append(out, id)
+		}
+		return out
+	}
+	shown = fit(ids, room)
+	if len(shown) == len(ids) {
+		return shown, nil
+	}
+
+	// The rest wait in a menu, which takes a chip of its own.
+	room -= chipWidth(c, "⋯", groupChipFont, 600, groupChipExtra) + groupChipGap
+	if room < 0 {
+		room = 0
+	}
+	shown = fit(ids, room)
+	if len(shown) == 0 {
+		shown = []string{holdingGroup}
+	}
+	if !groupShown(shown, a.group) {
+		// Room for the group the windows list, taken from the end of the
+		// chips before it.
+		used := float32(0)
+		for i, id := range shown {
+			used += width[id]
+			if i > 0 {
+				used += groupChipGap
+			}
+		}
+		for len(shown) > 0 && used+width[a.group]+groupChipGap > room {
+			last := len(shown) - 1
+			used -= width[shown[last]]
+			if last > 0 {
+				used -= groupChipGap
+			}
+			shown = shown[:last]
+		}
+		shown = append(shown, a.group)
+	}
+	seen := make(map[string]bool, len(shown))
+	for _, id := range shown {
+		seen[id] = true
+	}
+	for _, id := range ids {
+		if !seen[id] {
+			rest = append(rest, id)
+		}
+	}
+	return shown, rest
+}
+
+// groupShown reports that the chips show a group.
+func groupShown(shown []string, id string) bool {
+	for _, g := range shown {
+		if g == id {
+			return true
+		}
+	}
+	return false
+}
+
+// chipWidth is how wide a chip of text is drawn, with extra for its padding.
+func chipWidth(c *ui.Context, text string, size float32, weight int, extra float32) float32 {
+	w, _ := c.MeasureText(0, ui.Span{Text: text, Size: size, Weight: weight})
+	return w + extra
+}
+
+// groupMore is the menu of the groups the bar has no room for: a click lists
+// one, and the group the windows list renames and goes away here too.
+func (a *App) groupMore(c *ui.Context, t *ui.Theme, rest []string) {
+	more := ui.Row(c.Key("group-more")).Padding(3, 9).Radius(999).
+		Border(1, t.Border).Cursor(ui.CursorPointer).Shrink(0).
+		Tooltip("更多分组")
+	if more.Hovered() {
+		more.Background(t.SurfaceHover)
+	}
+	more.Children(func() {
+		ui.Text(c, "⋯").FontSize(groupChipFont).FontWeight(600).
+			TextColor(t.TextMuted).NoWrap()
+	})
+	more.PopoverMenuButton(func(m *ui.Menu) {
+		m.MaxWidth(300)
+		for _, id := range rest {
+			gid := id
+			it := m.Item(a.groupName(gid)).Radio(gid == a.group)
+			if long := a.groupName(gid); len([]rune(long)) > 16 {
+				it.Tooltip(long)
+			}
+			if it.Chosen() {
+				a.wantGroup, a.wantGroupSet = gid, true
+			}
+		}
+		if a.group != holdingGroup {
+			name := a.groupName(a.group)
+			m.Separator()
+			if m.Item("重命名「" + name + "」").Chosen() {
+				a.wantRename = a.group
+			}
+			if m.Item("删除「" + name + "」").Danger().Chosen() {
+				a.wantDeleteGroup = a.group
+			}
+		}
+	})
+}
+
+// groupChip is one group of the bar: a click lists it, and a group the user
+// made renames and goes away from its context menu.
+func (a *App) groupChip(c *ui.Context, t *ui.Theme, id string) {
+	chosen := id == a.group
+	fg, bg, edge := t.TextMuted, ui.Transparent, ui.Transparent
+	if chosen {
+		fg = t.Accent
+		bg = t.Accent.Alpha(0.14)
+		edge = t.Accent.Alpha(0.22)
+	}
+	r := ui.Row(c.Key("group-chip-"+id)).Padding(3, 9).Radius(999).
+		Background(bg).Border(1, edge).Cursor(ui.CursorPointer).
+		AlignItems(ui.Center).Gap(4)
+	if !chosen && r.Hovered() {
+		r.Background(t.SurfaceHover)
+	}
+	r.Children(func() {
+		ui.Text(c, a.groupName(id)).FontSize(groupChipFont).FontWeight(500).
+			TextColor(fg).NoWrap()
+	})
+	if id != holdingGroup {
+		r.ContextMenu(func(m *ui.Menu) {
+			if m.Item("重命名分组").Chosen() {
+				a.wantRename = id
+			}
+			if m.Item("删除分组").Chosen() {
+				a.wantDeleteGroup = id
+			}
+		})
+	}
+	if r.Clicked() {
+		a.SelectGroup(id)
+	}
+}
+
 // searchResults are the funds the search found, which a click follows.
 func (a *App) searchResults(c *ui.Context, t *ui.Theme) {
 	if a.searching {
@@ -214,7 +464,8 @@ func (a *App) searchResults(c *ui.Context, t *ui.Theme) {
 	}
 	for _, h := range a.hits {
 		h := h
-		followed := a.byCode(h.Code) != nil
+		f := a.byCode(h.Code)
+		followed := f != nil && f.In(a.group)
 		r := ui.Row(c.Key(h.Code)).Padding(8, 10).Radius(9).AlignItems(ui.Center).Gap(8)
 		if r.Hovered() {
 			r.Background(t.SurfaceHover)
@@ -277,6 +528,12 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 		if m.Item("移出自选").Chosen() {
 			a.removeAt(row.Index)
 		}
+		// A fund of two groups leaves the one the window lists, and stays in
+		// the other; one that is only here leaves altogether, above.
+		if len(f.Groups) > 1 && m.Item("移出「"+a.groupName(a.group)+"」").Chosen() {
+			a.leaveAt(row.Index)
+		}
+		a.joinMenu(m, f, row.Index)
 	})
 	r.Children(func() {
 		// The day's change, in a tile of its own color.
@@ -306,7 +563,7 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 		})
 
 		ui.Column(c).AlignItems(ui.End).Shrink(0).Gap(2).Children(func() {
-			if f.Shares > 0 {
+			if a.holds(f) {
 				ui.Text(c, signedMoney(f.TodayProfit())).FontSize(12).
 					FontWeight(600).TextColor(up(t, f.TodayProfit())).
 					FontFeatures("tnum").NoWrap()
@@ -315,7 +572,11 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 			} else {
 				ui.Textf(c, "%.4f", f.EstNav()).FontSize(12).FontWeight(500).
 					TextColor(t.Text).FontFeatures("tnum").NoWrap()
-				ui.Text(c, "未持有").FontSize(11).TextColor(t.TextMuted).NoWrap()
+				note := "未持有"
+				if a.group != holdingGroup {
+					note = "关注"
+				}
+				ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).NoWrap()
 			}
 		})
 	})
@@ -328,10 +589,16 @@ func (a *App) main(c *ui.Context, t *ui.Theme) {
 		ui.Divider(c)
 		f := a.Selected()
 		if f == nil {
-			ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-				ui.Text(c, "在左侧添加一只基金").FontSize(17).FontWeight(600)
-				ui.Text(c, "搜索代码或名称，就能看到实时估值与今日收益").
-					FontSize(12).TextColor(t.TextMuted)
+			title, note := "在左侧添加一只基金", "搜索代码或名称，就能看到实时估值与今日收益"
+			if a.group != holdingGroup {
+				title = "「" + a.groupName(a.group) + "」还没有基金"
+				note = "搜索代码或名称，加入这个分组；这里只看涨跌，不记录持仓"
+			}
+			ui.Column(c).Grow(1).Center().Gap(8).Padding(20).Children(func() {
+				ui.Text(c, title).FontSize(17).FontWeight(600).
+					SingleLine().Ellipsis("…").Tooltip(title)
+				ui.Text(c, note).FontSize(12).TextColor(t.TextMuted).
+					TextAlign(ui.Center)
 			})
 			return
 		}
@@ -339,7 +606,9 @@ func (a *App) main(c *ui.Context, t *ui.Theme) {
 			ui.Column(c).Padding(18, 24, 24, 24).Gap(12).Children(func() {
 				a.detailTitle(c, t, f)
 				a.stats(c, t, f)
-				a.holdingSection(c, t, f)
+				if a.group == holdingGroup {
+					a.holdingSection(c, t, f)
+				}
 				a.chartCard(c, t, f)
 				a.industriesCard(c, t, f)
 				a.holdingsCard(c, t, f)
@@ -351,13 +620,16 @@ func (a *App) main(c *ui.Context, t *ui.Theme) {
 }
 
 func (a *App) summaryBar(c *ui.Context, t *ui.Theme) {
-	s := a.Summary()
+	s := a.GroupSummary(a.group)
 	ui.Row(c).Padding(14, 24).Gap(18).AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Grow(1).Basis(0).MinWidth(0).Wrap().Gap(18).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Shrink(0).Gap(3).Children(func() {
 				label := "今日收益"
 				if !s.Holding {
 					label = "自选平均涨跌"
+					if a.group != holdingGroup {
+						label = "分组平均涨跌"
+					}
 				}
 				ui.Text(c, label).FontSize(11.5).TextColor(t.TextMuted).NoWrap()
 				ui.Row(c).Gap(8).AlignItems(ui.Baseline).Children(func() {
@@ -371,6 +643,8 @@ func (a *App) summaryBar(c *ui.Context, t *ui.Theme) {
 						ui.Text(c, pct(s.Pct)).FontSize(25).FontWeight(600).
 							TextColor(up(t, s.Pct)).FontFeatures("tnum").NoWrap().
 							ContentTransition(digits)
+					} else if a.group != holdingGroup {
+						ui.Text(c, "分组还没有基金").FontSize(14).TextColor(t.TextMuted)
 					} else {
 						ui.Text(c, "还没有自选基金").FontSize(14).TextColor(t.TextMuted)
 					}
@@ -473,6 +747,11 @@ func (a *App) detailTitle(c *ui.Context, t *ui.Theme, f *Fund) {
 					if f.Type != "" {
 						pill(c, f.Type, t.TextMuted, t.Text.Alpha(0.06))
 					}
+					if a.group != holdingGroup {
+						name := a.groupName(a.group)
+						pill(c, name, t.Accent, t.Accent.Alpha(0.12)).
+							Tooltip("这个分组只看涨跌，不记录持仓")
+					}
 				})
 			})
 			ui.Column(c).Shrink(0).AlignItems(ui.End).Gap(3).Children(func() {
@@ -504,7 +783,7 @@ func (a *App) valueLine(f *Fund) string {
 		if !f.QuoteAt.IsZero() {
 			at = " · " + f.QuoteAt.In(cst).Format("15:04")
 		}
-		if f.Shares > 0 {
+		if a.holds(f) {
 			return fmt.Sprintf("估算净值 %.4f", f.EstNav()) + at
 		}
 		return f.QuoteAt.In(cst).Format("01-02 15:04")
@@ -512,7 +791,7 @@ func (a *App) valueLine(f *Fund) string {
 	if !ok {
 		return ""
 	}
-	if f.Shares <= 0 {
+	if !a.holds(f) {
 		return "净值日 " + last.Date
 	}
 	line := fmt.Sprintf("单位 %.4f", last.Unit)
@@ -539,7 +818,7 @@ type statCard struct {
 func (a *App) stats(c *ui.Context, t *ui.Theme, f *Fund) {
 	last, hasLast := f.LastNav()
 	var cards []statCard
-	if f.Shares > 0 {
+	if a.holds(f) {
 		cards = []statCard{
 			{"今日收益", signedMoney(f.TodayProfit()), profitNote(f),
 				up(t, f.TodayProfit())},
@@ -805,4 +1084,37 @@ func trim(v float64, n int) string {
 	s := fmt.Sprintf("%.*f", n, v)
 	s = strings.TrimRight(s, "0")
 	return strings.TrimSuffix(s, ".")
+}
+
+// joinMenu adds the fund of a row to a group it is not in yet, from the menu
+// of the list.
+func (a *App) joinMenu(m *ui.Menu, f *Fund, row int) {
+	missing := 0
+	for _, g := range a.groups {
+		if !f.In(g.ID) {
+			missing++
+		}
+	}
+	if !f.In(holdingGroup) {
+		missing++
+	}
+	if missing == 0 {
+		return
+	}
+	m.Submenu("加入分组", func(sub *ui.Menu) {
+		if !f.In(holdingGroup) {
+			if sub.Item("持有").Chosen() {
+				a.joinAt(row, holdingGroup)
+			}
+		}
+		for _, g := range a.groups {
+			if f.In(g.ID) {
+				continue
+			}
+			id := g.ID
+			if sub.Item(g.Name).Chosen() {
+				a.joinAt(row, id)
+			}
+		}
+	})
 }

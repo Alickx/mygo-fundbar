@@ -50,8 +50,13 @@ func preview(t *testing.T) *App {
 		"sz000858": {Symbol: "sz000858", Pct: -1.06, At: time.Now()},
 	}
 	a.estimate(a.funds[0], nil)
+	for _, f := range a.funds {
+		f.Groups = []string{holdingGroup}
+	}
+	a.all = a.funds
 	a.sel = 0
 	a.period = 0
+	a.rebuildList()
 	return a
 }
 

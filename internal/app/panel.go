@@ -17,6 +17,10 @@ func (a *App) Panel(c *ui.Context) {
 	t := theme(c)
 	c.SetTheme(t)
 	c.Root().Background(ui.Transparent)
+	a.applyPending()
+	if c.Shortcut(0, ui.KeyEscape) && a.groupEditing {
+		a.cancelGroupEdit()
+	}
 
 	// The system draws a popover's material, corners and edge; elsewhere
 	// the content draws its own.
@@ -26,12 +30,22 @@ func (a *App) Panel(c *ui.Context) {
 	}
 	box.Padding(12).Gap(9).Children(func() {
 		a.panelHead(c, t)
+		w, _ := c.Size()
+		a.groupBar(c, t, w-24)
 		ui.Divider(c)
 		if len(a.funds) == 0 {
 			ui.Column(c).Gap(3).Padding(4, 2).Children(func() {
-				ui.Text(c, "还没有自选基金").FontSize(12.5).FontWeight(500)
-				ui.Text(c, "在主面板里搜索代码或名称添加").FontSize(11).
-					TextColor(t.TextMuted)
+				if a.group == holdingGroup {
+					ui.Text(c, "还没有自选基金").FontSize(12.5).FontWeight(500)
+					ui.Text(c, "在主面板里搜索代码或名称添加").FontSize(11).
+						TextColor(t.TextMuted)
+					return
+				}
+				ui.Text(c, "「"+a.groupName(a.group)+"」还没有基金").
+					FontSize(12.5).FontWeight(500).SingleLine().Ellipsis("…").
+					Tooltip(a.groupName(a.group))
+				ui.Text(c, "在主面板里搜索代码或名称加入").
+					FontSize(11).TextColor(t.TextMuted)
 			})
 		} else {
 			ui.Column(c).Gap(1).Children(func() {
@@ -53,7 +67,7 @@ func (a *App) Panel(c *ui.Context) {
 
 // panelHead is the day's gain, as the summary bar of the window says it.
 func (a *App) panelHead(c *ui.Context, t *ui.Theme) {
-	s := a.Summary()
+	s := a.GroupSummary(a.group)
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 		ui.Text(c, "基金估值").FontSize(13).FontWeight(600).NoWrap().Shrink(0)
 		ui.Spacer(c)
@@ -69,11 +83,19 @@ func (a *App) panelHead(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, pct(s.Pct)).FontSize(11.5).TextColor(up(t, s.Pct)).
 				FontFeatures("tnum").NoWrap()
 		case len(a.funds) > 0:
-			ui.Text(c, "自选平均").FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+			label := "自选平均"
+			if a.group != holdingGroup {
+				label = "分组平均"
+			}
+			ui.Text(c, label).FontSize(11.5).TextColor(t.TextMuted).NoWrap()
 			ui.Text(c, pct(s.Pct)).FontSize(18).FontWeight(600).
 				TextColor(up(t, s.Pct)).FontFeatures("tnum").NoWrap()
 		default:
-			ui.Text(c, "还没有自选基金").FontSize(12).TextColor(t.TextMuted)
+			label := "还没有自选基金"
+			if a.group != holdingGroup {
+				label = "分组还没有基金"
+			}
+			ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
 		}
 		ui.Spacer(c)
 		if len(a.funds) > 0 {
@@ -119,8 +141,9 @@ func (a *App) panelRow(c *ui.Context, t *ui.Theme, f *Fund) {
 				SingleLine().Ellipsis("…")
 		})
 		// The shares the user holds are what the preview is for; a fund
-		// they only follow says so by leaving the space empty.
-		if f.Shares > 0 {
+		// they only follow says so by leaving the space empty, and a made
+		// group never shows them.
+		if a.holds(f) {
 			profit := f.TodayProfit()
 			ui.Column(c).AlignItems(ui.End).Shrink(0).Gap(1).Children(func() {
 				ui.Text(c, signedMoney(profit)).FontSize(11.5).FontWeight(600).

@@ -24,13 +24,32 @@ type Entry struct {
 	// for each share.
 	Shares float64 `json:"shares,omitempty"`
 	Cost   float64 `json:"cost,omitempty"`
+	// Groups are the groups the fund is listed in. "" is the holding group,
+	// the funds the user holds or follows in the main list; any other id is
+	// a group the user made to watch funds without holding them. A fund of
+	// an older file names none, and is in the holding group alone.
+	Groups []string `json:"groups,omitempty"`
+}
+
+// Group is a list of funds the user made to watch, apart from the holding
+// group.
+type Group struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // Data is the app's own state, as the file keeps it.
 type Data struct {
-	Funds    []Entry `json:"funds"`
-	Selected string  `json:"selected,omitempty"`
-	Period   int     `json:"period,omitempty"`
+	Funds  []Entry `json:"funds"`
+	Groups []Group `json:"groups,omitempty"`
+	// ActiveGroup is the group whose funds the windows list, "" being the
+	// holding group.
+	ActiveGroup string `json:"group,omitempty"`
+	Selected    string `json:"selected,omitempty"`
+	// GroupSelected is the chosen fund of each made group, by group id; the
+	// holding group's stays in Selected.
+	GroupSelected map[string]string `json:"groupSelected,omitempty"`
+	Period        int               `json:"period,omitempty"`
 	// NavView is the history the chart card shows: 0 for the line, 1 for the
 	// list of each day's value.
 	NavView int `json:"navView,omitempty"`

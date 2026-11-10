@@ -27,6 +27,10 @@ type Fund struct {
 	Type   string
 	Shares float64
 	Cost   float64
+	// Groups are the groups the fund is listed in: "" is the holding group,
+	// the main list of funds the user holds or follows, and any other id is
+	// a group the user made to watch funds without holding them.
+	Groups []string
 
 	// Navs is the fund's net asset value each day, oldest first.
 	Navs           []model.Nav
@@ -45,6 +49,16 @@ type Fund struct {
 	// Err is why the fund could not be read, if it could not.
 	Err    string
 	Loaded bool
+}
+
+// In reports that the fund is listed in a group.
+func (f *Fund) In(group string) bool {
+	for _, g := range f.Groups {
+		if g == group {
+			return true
+		}
+	}
+	return false
 }
 
 // LastNav is the newest net asset value the fund published.
@@ -161,15 +175,40 @@ type App struct {
 	dir    string
 	config string
 
+	// all is every fund the user follows, in the order the user put them
+	// in; funds is the active group's, which the list shows.
+	all    []*Fund
 	funds  []*Fund
-	list   ui.ListState
-	sel    int
-	period int
-	pick   int
+	groups []store.Group
+	// group is the active group: "" for the holding group, or the id of a
+	// group the user made.
+	group string
+	// selCode is the chosen fund of each group, by group id.
+	selCode map[string]string
+	list    ui.ListState
+	sel     int
+	period  int
+	pick    int
 	// navView is the history the chart card shows: the line, or a list of
 	// each day's value.
 	navView int
 	query   string
+
+	// groupEditing unfolds the field of a new or renamed group, whose id is
+	// groupEditID ("" while the group is new).
+	groupEditing bool
+	groupEditID  string
+	groupDraft   string
+	groupErr     string
+	// wantNewGroup, wantRename and wantDeleteGroup are what a menu asked
+	// for, done before the next frame is built.
+	wantNewGroup    bool
+	wantRename      string
+	wantDeleteGroup string
+	// wantGroup is the group the more menu chose, "" being the holding
+	// group, and wantGroupSet says it chose one.
+	wantGroup    string
+	wantGroupSet bool
 
 	// sidebarWidth is how wide the user made the list of funds, and
 	// savedSidebar what the file has.
@@ -193,9 +232,13 @@ type App struct {
 
 	// want is a fund the menu bar item chose, which the next frame shows.
 	want string
-	// pendingRemove is a fund the context menu takes out, after the frame
-	// that built it.
+	// pendingRemove and pendingLeave are a fund the context menu takes out,
+	// or takes out of the group, after the frame that built it; wantJoin is
+	// a fund it adds to another group.
 	pendingRemove int
+	pendingLeave  int
+	wantJoin      int
+	wantJoinGroup string
 	// searchDue is when the search awaits the end of typing.
 	searchDue time.Time
 }
@@ -212,7 +255,10 @@ func New(dir string) *App {
 		dir:           dir,
 		config:        filepath.Join(dir, "funds.json"),
 		pendingRemove: -1,
+		pendingLeave:  -1,
+		wantJoin:      -1,
 		pick:          -1,
+		selCode:       map[string]string{},
 	}
 }
 
@@ -227,18 +273,34 @@ func (a *App) Start() {
 // Load reads the funds the user follows and the cache of what was read
 // about them, without asking the network.
 func (a *App) Load() {
+	a.all = nil
 	a.funds = nil
-	a.sel = 0
+	a.sel = -1
 	data := store.Load(a.config)
+	a.groups = data.Groups
+	a.selCode = map[string]string{}
+	if data.Selected != "" {
+		a.selCode[""] = data.Selected
+	}
+	for id, code := range data.GroupSelected {
+		if id != "" && code != "" {
+			a.selCode[id] = code
+		}
+	}
+	a.group = data.ActiveGroup
+	if a.group != "" && !a.hasGroup(a.group) {
+		a.group = ""
+	}
 	for _, e := range data.Funds {
-		f := &Fund{Code: e.Code, Type: e.Type, Shares: e.Shares, Cost: e.Cost}
+		groups := e.Groups
+		if len(groups) == 0 {
+			groups = []string{""}
+		}
+		f := &Fund{Code: e.Code, Type: e.Type, Shares: e.Shares, Cost: e.Cost, Groups: groups}
 		if snap, ok := store.LoadSnapshot(a.dir, e.Code); ok {
 			a.fill(f, snap)
 		}
-		a.funds = append(a.funds, f)
-		if e.Code == data.Selected {
-			a.sel = len(a.funds) - 1
-		}
+		a.all = append(a.all, f)
 	}
 	a.period = data.Period
 	a.navView = data.NavView
@@ -246,11 +308,7 @@ func (a *App) Load() {
 	if a.sidebarWidth == 0 {
 		a.sidebarWidth = 348
 	}
-	if len(a.funds) == 0 {
-		a.sel = -1
-	} else if a.sel >= len(a.funds) {
-		a.sel = 0
-	}
+	a.rebuildList()
 }
 
 func (a *App) fill(f *Fund, snap *store.Snapshot) {
@@ -283,14 +341,25 @@ func (a *App) estimate(f *Fund, quotes map[string]model.Quote) {
 
 // save writes the funds the user follows.
 func (a *App) save() {
-	data := &store.Data{Period: a.period, NavView: a.navView, SidebarWidth: a.sidebarWidth}
-	for _, f := range a.funds {
+	a.syncSelection()
+	data := &store.Data{
+		Period: a.period, NavView: a.navView, SidebarWidth: a.sidebarWidth,
+		Groups: a.groups, ActiveGroup: a.group, Selected: a.selCode[""],
+	}
+	for _, f := range a.all {
 		data.Funds = append(data.Funds, store.Entry{
 			Code: f.Code, Type: f.Type, Shares: f.Shares, Cost: f.Cost,
+			Groups: f.Groups,
 		})
 	}
-	if a.sel >= 0 && a.sel < len(a.funds) {
-		data.Selected = a.funds[a.sel].Code
+	for id, code := range a.selCode {
+		if id == "" || code == "" {
+			continue
+		}
+		if data.GroupSelected == nil {
+			data.GroupSelected = map[string]string{}
+		}
+		data.GroupSelected[id] = code
 	}
 	if err := data.Save(a.config); err != nil {
 		a.failure = "保存失败：" + err.Error()
@@ -308,14 +377,14 @@ func (a *App) Selected() *Fund {
 // refresh reads every fund again, in the background, and shows the outcome
 // when it is in.
 func (a *App) refresh() {
-	if a.busy || len(a.funds) == 0 {
+	if a.busy || len(a.all) == 0 {
 		return
 	}
 	a.busy = true
-	codes := make([]string, 0, len(a.funds))
-	types := make(map[string]string, len(a.funds))
-	cached := make(map[string]*store.Snapshot, len(a.funds))
-	for _, f := range a.funds {
+	codes := make([]string, 0, len(a.all))
+	types := make(map[string]string, len(a.all))
+	cached := make(map[string]*store.Snapshot, len(a.all))
+	for _, f := range a.all {
 		codes = append(codes, f.Code)
 		types[f.Code] = f.Type
 		if snap, ok := store.LoadSnapshot(a.dir, f.Code); ok {
@@ -520,7 +589,7 @@ func latestQuote(quotes map[string]model.Quote, holdings []model.Holding) time.T
 }
 
 func (a *App) byCode(code string) *Fund {
-	for _, f := range a.funds {
+	for _, f := range a.all {
 		if f.Code == code {
 			return f
 		}
@@ -565,85 +634,149 @@ func tradingNow() bool {
 	return (m >= 9*60+15 && m <= 11*60+30) || (m >= 13*60 && m <= 15*60+5)
 }
 
-// Add follows a fund.
+// Add follows a fund, in the group the user is looking at.
 func (a *App) Add(hit source.Hit) {
-	if a.byCode(hit.Code) != nil {
-		a.query = ""
-		a.hits = nil
-		for i, f := range a.funds {
-			if f.Code == hit.Code {
-				a.sel = i
-			}
-		}
-		return
-	}
-	f := &Fund{Code: hit.Code, Name: hit.Name, Type: hit.Type}
-	a.funds = append(a.funds, f)
-	a.sel = len(a.funds) - 1
 	a.query = ""
 	a.hits = nil
 	a.pick = -1
+	if f := a.byCode(hit.Code); f != nil {
+		if !f.In(a.group) {
+			f.Groups = append(f.Groups, a.group)
+			a.save()
+			a.rebuildList()
+			a.redraw()
+		}
+		a.choose(f.Code)
+		return
+	}
+	f := &Fund{Code: hit.Code, Name: hit.Name, Type: hit.Type, Groups: []string{a.group}}
+	a.all = append(a.all, f)
+	a.selCode[a.group] = f.Code
+	a.rebuildList()
 	a.save()
 	a.refresh()
 }
 
-// Remove stops following the fund at i.
+// Remove stops following the fund at i, in every group.
 func (a *App) Remove(i int) {
-	if i < 0 || i >= len(a.funds) {
+	f := a.visible(i)
+	if f == nil {
 		return
 	}
-	store.DropSnapshot(a.dir, a.funds[i].Code)
-	a.funds = append(a.funds[:i], a.funds[i+1:]...)
-	if a.sel >= len(a.funds) {
-		a.sel = len(a.funds) - 1
+	store.DropSnapshot(a.dir, f.Code)
+	a.all = dropFund(a.all, f)
+	for id, code := range a.selCode {
+		if code == f.Code {
+			delete(a.selCode, id)
+		}
 	}
+	a.rebuildList()
 	a.pick = -1
 	a.save()
 	a.updateTray()
 	a.redraw()
 }
 
-// reorder moves rows of the list to the place the user dragged them to.
+// LeaveGroup takes the fund at i out of the active group, and keeps it in
+// the groups it is in besides that one. A fund that leaves its last group is
+// no longer followed at all.
+func (a *App) LeaveGroup(i int) {
+	f := a.visible(i)
+	if f == nil {
+		return
+	}
+	groups := make([]string, 0, len(f.Groups))
+	for _, g := range f.Groups {
+		if g != a.group {
+			groups = append(groups, g)
+		}
+	}
+	if len(groups) == 0 {
+		a.Remove(i)
+		return
+	}
+	f.Groups = groups
+	delete(a.selCode, a.group)
+	a.rebuildList()
+	a.save()
+	a.updateTray()
+	a.redraw()
+}
+
+// reorder moves rows of the list to the place the user dragged them to. The
+// rows of the other groups keep their order around the moved ones.
 func (a *App) reorder(rows []int, to int) {
 	if len(rows) == 0 || len(a.funds) == 0 {
 		return
 	}
-	moving := make(map[int]bool, len(rows))
+	a.syncSelection()
+	moving := make(map[*Fund]bool, len(rows))
 	var moved []*Fund
 	for _, r := range rows {
-		if r >= 0 && r < len(a.funds) {
-			moving[r] = true
-			moved = append(moved, a.funds[r])
+		if r < 0 || r >= len(a.funds) || moving[a.funds[r]] {
+			continue
 		}
+		moving[a.funds[r]] = true
+		moved = append(moved, a.funds[r])
 	}
 	if len(moved) == 0 {
 		return
 	}
-	chosen := a.Selected()
 	var rest []*Fund
-	for i, f := range a.funds {
-		if !moving[i] {
+	for _, f := range a.funds {
+		if !moving[f] {
 			rest = append(rest, f)
 		}
 	}
 	// `to` counts the rows before the place in the list as it was.
 	at := to
-	for r := range moving {
-		if r < to {
+	for _, r := range rows {
+		if r >= 0 && r < to {
 			at--
 		}
 	}
 	at = max(0, min(at, len(rest)))
-	out := make([]*Fund, 0, len(a.funds))
-	out = append(out, rest[:at]...)
-	out = append(out, moved...)
-	out = append(out, rest[at:]...)
-	a.funds = out
-	for i, f := range a.funds {
-		if f == chosen {
-			a.sel = i
+
+	// Place the moved rows beside the row they now follow, or precede, in
+	// the group, so that the funds of the other groups keep their own order.
+	remaining := make([]*Fund, 0, len(a.all))
+	for _, f := range a.all {
+		if !moving[f] {
+			remaining = append(remaining, f)
 		}
 	}
+	pos := 0
+	switch {
+	case len(rest) == 0:
+		// Every row of the group moved: the block goes where the first of
+		// them was.
+		for i, f := range a.all {
+			if f == moved[0] {
+				pos = min(i, len(remaining))
+				break
+			}
+		}
+	case at > 0:
+		for i, f := range remaining {
+			if f == rest[at-1] {
+				pos = i + 1
+				break
+			}
+		}
+	default:
+		for i, f := range remaining {
+			if f == rest[0] {
+				pos = i
+				break
+			}
+		}
+	}
+	out := make([]*Fund, 0, len(a.all))
+	out = append(out, remaining[:pos]...)
+	out = append(out, moved...)
+	out = append(out, remaining[pos:]...)
+	a.all = out
+	a.rebuildList()
 	a.save()
 }
 
@@ -687,16 +820,26 @@ type Summary struct {
 	Down    int
 }
 
-// Summary adds up the funds the user follows.
-func (a *App) Summary() Summary {
+// Summary adds up the funds of the holding group: the menu bar item stays
+// what it was, whatever group the windows show.
+func (a *App) Summary() Summary { return a.summarize(a.inGroup(""), true) }
+
+// GroupSummary adds up the funds of a group. Only the holding group counts
+// the shares held: a made group says how its funds moved, and nothing of
+// what the user owns.
+func (a *App) GroupSummary(group string) Summary {
+	return a.summarize(a.inGroup(group), group == "")
+}
+
+// summarize adds up the funds, counting their shares when asked to.
+func (a *App) summarize(funds []*Fund, held bool) Summary {
 	var s Summary
-	var cost, value float64
-	for _, f := range a.funds {
-		if f.Shares > 0 {
+	var value float64
+	for _, f := range funds {
+		if held && f.Shares > 0 {
 			s.Holding = true
 			s.Value += f.Value()
 			s.Profit += f.TodayProfit()
-			cost += f.Shares * f.Cost
 			value += f.Value()
 		}
 		switch {
@@ -715,7 +858,7 @@ func (a *App) Summary() Summary {
 		// Without shares, the funds' average change says the same thing.
 		var sum float64
 		var n int
-		for _, f := range a.funds {
+		for _, f := range funds {
 			if f.Loaded || f.HasEst {
 				sum += f.ChangePct()
 				n++
@@ -732,7 +875,7 @@ func (a *App) Summary() Summary {
 // the icon does not move as the numbers change.
 func (a *App) trayTitle() string {
 	s := a.Summary()
-	if len(a.funds) == 0 {
+	if len(a.all) == 0 || len(a.inGroup(holdingGroup)) == 0 {
 		return ""
 	}
 	var text string
@@ -746,8 +889,11 @@ func (a *App) trayTitle() string {
 
 func (a *App) trayTooltip() string {
 	s := a.Summary()
-	if len(a.funds) == 0 {
-		return "基金估值：还没有自选基金"
+	if len(a.inGroup(holdingGroup)) == 0 {
+		if len(a.all) == 0 {
+			return "基金估值：还没有自选基金"
+		}
+		return "基金估值：持有分组还没有基金"
 	}
 	if s.Holding {
 		return fmt.Sprintf("今日收益 %+.2f 元（%+.2f%%）\n持仓市值 %.2f 元", s.Profit, s.Pct, s.Value)

@@ -21,5 +21,24 @@ func (a *App) PreviewSettings(c *ui.Context) { a.settingsView(c) }
 // PreviewEdit unfolds the fields of the shares held.
 func (a *App) PreviewEdit(on bool) { a.editing = on }
 
+// PreviewGroup shows a group the user made, making it when it is new.
+func (a *App) PreviewGroup(name string) {
+	for _, g := range a.groups {
+		if g.Name == name {
+			a.SelectGroup(g.ID)
+			return
+		}
+	}
+	a.beginNewGroup()
+	a.groupDraft = name
+	a.CommitGroup()
+}
+
+// PreviewGroupEdit unfolds the field of a new group.
+func (a *App) PreviewGroupEdit() {
+	a.beginNewGroup()
+	a.groupDraft = "关注"
+}
+
 // PreviewLogin sets the login item a preview shows.
 func (a *App) PreviewLogin(on bool) { a.previewLogin = on }

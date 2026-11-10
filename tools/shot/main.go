@@ -71,6 +71,24 @@ func main() {
 		case "empty":
 			a = app.New(filepath.Join(os.TempDir(), "fundbar-empty"))
 			a.Load()
+		case "group":
+			a.PreviewGroup(os.Getenv("FUNDBAR_GROUP"))
+		case "groupnew":
+			a.PreviewGroupEdit()
+		case "panel":
+			tester := ui.NewTesterWith(a.Panel, 320, 560,
+				ui.TesterOptions{Dark: dark})
+			tester.Frame()
+			img := tester.Image()
+			f, err := os.Create(out)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer f.Close()
+			if err := png.Encode(f, img); err != nil {
+				log.Fatal(err)
+			}
+			return
 		}
 	}
 
