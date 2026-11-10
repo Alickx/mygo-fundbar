@@ -219,8 +219,9 @@ func (c *Client) Industries(ctx context.Context, code string) ([]model.Industry,
 	return industries, latest.Report, nil
 }
 
-// Profiles reads the industry, board and themes of stocks, in one request
-// per batch.
+// Profiles reads the industry and themes of stocks, in one request per
+// batch. Eastmoney also returns each stock's regional board (f102), which
+// names a province rather than a business and so is not read.
 func (c *Client) Profiles(ctx context.Context, symbols []string) (map[string]model.StockProfile, error) {
 	out := make(map[string]model.StockProfile, len(symbols))
 	const chunk = 60
@@ -255,7 +256,7 @@ func (c *Client) profilesChunk(ctx context.Context, symbols []string, out map[st
 		return nil
 	}
 	url := "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=" +
-		strings.Join(secids, ",") + "&fields=f12,f100,f102,f103"
+		strings.Join(secids, ",") + "&fields=f12,f100,f103"
 	body, err := c.get(ctx, url, "https://quote.eastmoney.com/")
 	if err != nil {
 		return err
@@ -265,7 +266,6 @@ func (c *Client) profilesChunk(ctx context.Context, symbols []string, out map[st
 			Rows []struct {
 				Code     string `json:"f12"`
 				Industry string `json:"f100"`
-				Board    string `json:"f102"`
 				Concepts string `json:"f103"`
 			} `json:"diff"`
 		} `json:"data"`
@@ -280,7 +280,6 @@ func (c *Client) profilesChunk(ctx context.Context, symbols []string, out map[st
 		}
 		out[symbol] = model.StockProfile{
 			Industry: strings.TrimSpace(row.Industry),
-			Board:    strings.TrimSpace(row.Board),
 			Concepts: splitConcepts(row.Concepts),
 		}
 	}

@@ -690,16 +690,9 @@ func (a *App) industriesCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	})
 }
 
-// stockProfileLine names a stock's industry and board, when it has them.
+// stockProfileLine names a stock's industry, when it has one.
 func stockProfileLine(p model.StockProfile) string {
-	var parts []string
-	if p.Industry != "" {
-		parts = append(parts, p.Industry)
-	}
-	if p.Board != "" {
-		parts = append(parts, p.Board)
-	}
-	return strings.Join(parts, " · ")
+	return p.Industry
 }
 
 // holdingSection shows the shares the user holds, and their price: read

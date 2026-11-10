@@ -22,16 +22,26 @@ var periods = []struct {
 	{"近1年", 365},
 }
 
-// windowOf is the fund's net asset value over the chosen period.
-func windowOf(f *Fund, period int) []model.Nav {
+// periodStart is when the chosen period opens. A fund younger than the
+// period has net asset values from later on, but the window the user asked
+// for still starts here: see plot.
+func periodStart(f *Fund, period int) time.Time {
 	if len(f.Navs) == 0 {
-		return nil
+		return time.Time{}
 	}
 	if period < 0 || period >= len(periods) {
 		period = 0
 	}
 	last := parseDay(f.Navs[len(f.Navs)-1].Date)
-	from := last.AddDate(0, 0, -periods[period].days)
+	return last.AddDate(0, 0, -periods[period].days)
+}
+
+// windowOf is the fund's net asset value over the chosen period.
+func windowOf(f *Fund, period int) []model.Nav {
+	if len(f.Navs) == 0 {
+		return nil
+	}
+	from := periodStart(f, period)
 	var out []model.Nav
 	for _, n := range f.Navs {
 		if !parseDay(n.Date).Before(from) {
@@ -59,6 +69,22 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 		a.navView = 0
 	}
 	navs := windowOf(f, a.period)
+	// A young fund has less history than the period asks for, so the longer
+	// periods show the same days. Cast the span as the fund's whole history,
+	// and keep the wider window in the plot, so it reads as a new fund rather
+	// than a chart that did not change.
+	from := periodStart(f, a.period)
+	partial := len(f.Navs) > 0 && parseDay(f.Navs[0].Date).After(from)
+	// The plot opens at the window's start when the fund is younger than it,
+	// so the line takes only the tail of the plot.
+	axisFrom := time.Time{}
+	if partial {
+		axisFrom = from
+	}
+	label := periods[a.period].label
+	if partial {
+		label = "成立以来"
+	}
 	change := 0.0
 	if len(navs) > 1 && navs[0].Unit > 0 {
 		change = (navs[len(navs)-1].Unit/navs[0].Unit - 1) * 100
@@ -89,15 +115,18 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			if len(navs) == 0 {
 				return
 			}
-			info := periods[a.period].label + "净值变化 " + pct(change)
+			info := label + "净值变化 " + pct(change)
 			color := up(t, change)
+			if partial && len(navs) > 1 {
+				info += " · 净值自 " + navs[0].Date + " 起"
+			}
 			if len(navs) == 1 {
 				info = "只有 " + navs[0].Date + " 一个净值日"
 				color = t.TextMuted
 			}
 			if a.navView == 1 {
 				info = fmt.Sprintf("%s · %d 个交易日 · 区间 %s",
-					periods[a.period].label, len(navs), pct(change))
+					label, len(navs), pct(change))
 			}
 			if a.pick >= 0 && a.pick < len(navs) {
 				n := navs[a.pick]
@@ -105,8 +134,15 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 					n.Date, n.Unit, pct(n.Pct))
 				color = up(t, n.Pct)
 			}
+			// The tooltip carries the whole story, including why a period
+			// longer than the fund's history shows what it shows.
+			tip := info
+			if partial && len(navs) > 1 && a.navView == 0 && a.pick < 0 {
+				tip = fmt.Sprintf("该基金净值自 %s 起，只有 %d 个交易日，填不满%s，图上显示的是全部历史",
+					navs[0].Date, len(navs), periods[a.period].label)
+			}
 			ui.Text(c, info).FontSize(11.5).
-				TextColor(color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(info)
+				TextColor(color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(tip)
 		})
 		if a.navView == 1 {
 			a.navTable(c, t, navs)
@@ -118,7 +154,7 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			})
 			return
 		}
-		a.plot(c, t, navs, up(t, change))
+		a.plot(c, t, navs, axisFrom, up(t, change))
 	})
 }
 
@@ -176,10 +212,16 @@ func (a *App) navTable(c *ui.Context, t *ui.Theme, navs []model.Nav) {
 }
 
 // plot draws the line of a fund's net asset value, and reads out the day
-// under the pointer.
-func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, color ui.Color) {
+// under the pointer. The window opens at axisFrom when it lies before the
+// first value, as it does for a fund younger than the period: the line
+// then takes only the tail of the plot, so a longer period looks
+// different rather than identical.
+func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, axisFrom time.Time, color ui.Color) {
 	n := len(navs)
 	t0, t1 := parseDay(navs[0].Date), parseDay(navs[n-1].Date)
+	if !axisFrom.IsZero() && axisFrom.Before(t0) {
+		t0 = axisFrom
+	}
 	span := t1.Sub(t0)
 	if span <= 0 {
 		return

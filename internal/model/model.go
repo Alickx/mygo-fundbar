@@ -35,11 +35,10 @@ type Industry struct {
 	Weight float64
 }
 
-// StockProfile says what a stock is: the industry it belongs to, the board
-// it trades on, and the themes it is traded with.
+// StockProfile says what a stock is: the industry it belongs to, and the
+// themes it is traded with.
 type StockProfile struct {
 	Industry string
-	Board    string
 	Concepts []string
 }
 

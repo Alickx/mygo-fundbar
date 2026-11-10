@@ -34,9 +34,9 @@ func preview(t *testing.T) *App {
 				{Symbol: "sz000858", Code: "000858", Name: "五粮液", Weight: 9.05},
 			},
 			Profiles: map[string]model.StockProfile{
-				"sh600519": {Industry: "白酒Ⅱ", Board: "贵州板块",
+				"sh600519": {Industry: "白酒Ⅱ",
 					Concepts: []string{"白酒", "超级品牌"}},
-				"sz000858": {Industry: "白酒Ⅱ", Board: "四川板块"},
+				"sz000858": {Industry: "白酒Ⅱ"},
 			},
 		},
 		{
@@ -178,10 +178,14 @@ func TestIndustryAndStockProfileAreShown(t *testing.T) {
 	a := preview(t)
 	tt := ui.NewTester(a.View, 1080, 900)
 	tt.Frame()
-	for _, text := range []string{"行业配置", "制造业", "白酒Ⅱ · 贵州板块"} {
+	for _, text := range []string{"行业配置", "制造业", "白酒Ⅱ"} {
 		if !tt.HasText(text) {
 			t.Fatalf("missing %q", text)
 		}
+	}
+	// The stock's regional board is not shown: the industry is enough.
+	if tt.HasText("贵州板块") {
+		t.Fatal("expected no regional board")
 	}
 }
 
@@ -204,5 +208,64 @@ func TestMoneyAndPadding(t *testing.T) {
 	}
 	if got := padFigures("+1234.56", 7); got != "+1234.56" {
 		t.Fatalf("padFigures = %q", got)
+	}
+}
+
+// youngFund gives the first fund a history that starts days ago, as a fund
+// issued recently has.
+func youngFund(a *App, days int) *Fund {
+	f := a.funds[0]
+	last := now()
+	f.Navs = nil
+	for i := days; i >= 0; i-- {
+		f.Navs = append(f.Navs, model.Nav{
+			Date: last.AddDate(0, 0, -i).Format("2006-01-02"),
+			Unit: 1 + float64(days-i)*0.001,
+		})
+	}
+	return f
+}
+
+func TestYoungFundCallsTheLongerPeriodItsWholeHistory(t *testing.T) {
+	a := preview(t)
+	f := youngFund(a, 60)
+	a.period = 2 // 近6月, longer than the fund's history
+	tt := ui.NewTester(a.View, 1080, 900)
+	tt.Frame()
+	if !tt.HasText("成立以来净值变化") {
+		t.Fatalf("expected the whole history to be named, got %v", tt.Texts())
+	}
+	if !tt.HasText("净值自 " + f.Navs[0].Date + " 起") {
+		t.Fatalf("expected the first value's date, got %v", tt.Texts())
+	}
+	a.navView = 1
+	tt.Frame()
+	if !tt.HasText("成立以来 · 61 个交易日") {
+		t.Fatalf("expected the list to count the whole history, got %v", tt.Texts())
+	}
+	// A period the fund fills keeps the period's own name.
+	a.navView = 0
+	a.period = 0
+	tt.Frame()
+	if tt.HasText("成立以来") {
+		t.Fatal("a month of history is a month, not the fund's whole life")
+	}
+	if !tt.HasText("近1月净值变化") {
+		t.Fatalf("expected the month's change, got %v", tt.Texts())
+	}
+}
+
+func TestYoungFundDrawsTheWiderWindow(t *testing.T) {
+	a := preview(t)
+	f := youngFund(a, 60)
+	// Every longer period holds the same values, but the window they are
+	// drawn in grows, so the line takes less of the plot each time.
+	if six, year := windowOf(f, 2), windowOf(f, 3); len(six) != len(year) {
+		t.Fatalf("近6月 holds %d values, 近1年 %d", len(six), len(year))
+	}
+	start6, start12 := periodStart(f, 2), periodStart(f, 3)
+	first := parseDay(f.Navs[0].Date)
+	if !start12.Before(start6) || !start6.Before(first) {
+		t.Fatalf("windows open at %v and %v, history at %v", start12, start6, first)
 	}
 }
