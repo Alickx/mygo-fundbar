@@ -1,163 +1,137 @@
-# FundBar 基金估值
+<p align="center">
+  <img src="resources/icon.png" width="96" height="96" alt="FundBar 图标">
+</p>
 
-[![build](https://github.com/Alickx/mygo-fundbar/actions/workflows/build.yml/badge.svg)](https://github.com/Alickx/mygo-fundbar/actions/workflows/build.yml)
+<h1 align="center">FundBar</h1>
 
-一个住 macOS 菜单栏的基金估值小工具：实时估值、自选列表、历史净值曲线，状态栏直接显示今天赚了多少。
+<p align="center">
+  <strong>在 Mac 菜单栏，关注你的基金。</strong><br>
+  盘中估值、自选基金、净值走势与持仓收益，抬眼可见。
+</p>
 
-![light](docs/screenshot.png)
-![dark](docs/screenshot-dark.png)
-<img src="docs/screenshot-settings.png" width="480" alt="设置">
+<p align="center">
+  <a href="https://github.com/Alickx/mygo-fundbar/actions/workflows/build.yml"><img src="https://github.com/Alickx/mygo-fundbar/actions/workflows/build.yml/badge.svg" alt="构建状态"></a>
+  <img src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-222222?logo=apple&logoColor=white" alt="支持 Apple Silicon 与 Intel Mac">
+  <a href="https://opensource.org/license/mit"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
+</p>
 
-（截图里的持仓和收益是示例数字。）
+<p align="center">
+  <a href="https://github.com/Alickx/mygo-fundbar/releases">下载应用</a> ·
+  <a href="#快速上手">快速上手</a> ·
+  <a href="docs/DEVELOPMENT.md">开发指南</a> ·
+  <a href="https://github.com/Alickx/mygo-fundbar/issues">反馈问题</a>
+</p>
 
-## 为什么自己算估值
+---
 
-2023 年之后各大平台的「实时估值」陆续下线，官方接口也没了：
+FundBar 是一款开源的 macOS 菜单栏基金工具。把关心的基金加入自选，即可查看盘中估值、已公布净值和历史走势；录入持有份额与成本价后，还能随时了解持仓收益。
 
-| 接口 | 现状 |
-|---|---|
-| `fundgz.1234567.com.cn/js/{code}.js` | 404，已下线 |
-| `fundmobapi.eastmoney.com/…/FundMNFInfo` | 200，但 `GSZ`/`GSZZL` 全是 `null` |
-| 蛋卷 `/djapi/fund/estimate/{code}` | 需要登录 |
-| 雪球 `quote.json` | 需要 token |
+应用使用 Go 与 [MyGo](https://github.com/egoist/mygo) 构建原生界面，支持浅色与深色外观，无需注册账号或配置 API Key。
 
-所以本项目的估值是**自己算的**：
+## 界面预览
 
-```
-估值涨跌% = Σ(重仓股占净值比例 × 该股票今日涨跌%) ÷ Σ(重仓股占净值比例)
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshot.png">
+  <img src="docs/screenshot.png" width="1080" alt="FundBar 主界面：左侧自选基金，右侧展示基金净值、历史走势与季报重仓股">
+</picture>
 
-也就是用最新季报的前十大重仓股，按占比归一化后加权。净值本身仍来自官方（当日净值每天晚上公布），估值只在净值公布前替代它。
+<p align="center">
+  <sub>浅色与深色外观随系统切换；截图仅用于界面展示。</sub>
+</p>
 
-### 实测精度（2026-11-09 收盘价 vs 当日公布净值）
+## 功能亮点
 
-| 基金 | 类型 | 重仓覆盖 | 估算 | 实际 | 误差 |
-|---|---|---|---|---|---|
-| 161725 招商中证白酒 | 指数 | 86.4% | -0.69% | -0.63% | -0.06pp |
-| 110022 易方达消费行业 | 股票 | 72.5% | -0.65% | -0.63% | -0.02pp |
-| 003096 中欧医疗健康C | 偏股混合 | 74.8% | -1.16% | -0.84% | -0.32pp |
-| 005827 易方达蓝筹精选 | 偏股混合 | 42.6% | -0.43% | -0.21% | -0.22pp |
-
-覆盖越低误差越大。覆盖不到 20% 的基金（如 ETF 联接、QDII）不显示估值，只显示官方净值。
-
-## 功能
-
-- **实时估值**：交易时段每 45 秒刷新，收盘后显示已公布净值；数字滚动更新
-- **自选列表**：搜索代码/名称添加，右键移出，拖动排序，侧栏宽度可拖
-- **历史净值**：近 1 月 / 3 月 / 6 月 / 1 年，走势图与每日列表切换，鼠标划过读数；历史填不满所选周期时（新基金）标注「成立以来」并留出成立前的空档
-- **行业与板块**：基金类型、季报行业配置；重仓股显示所属行业，悬停查看概念
-- **今日收益**：填了份额和成本价后，状态栏显示当日收益，面板显示累计收益
-- **菜单栏预览**：点状态栏图标弹出小窗，列出自选基金的今日涨跌，持仓的还显示今日收益与市值；点一行直接进主面板
-- **状态栏**：图标上带着今日收益/平均涨跌，右键出菜单（含每只基金的涨跌、刷新、设置、退出）
-- **设置窗口**（`Cmd+,`）：登录时自动启动、清空缓存、打开数据目录
-- **毛玻璃侧栏**：`VibrancySidebar` 材质，跟随桌面壁纸；深色模式自动适配
-
-## 数据来源
-
-| 用途 | 接口 |
-|---|---|
-| 基金名 / 全部历史净值 / 股票仓位 / 持仓代码 | `fund.eastmoney.com/pingzhongdata/{code}.js` |
-| 前十大重仓股及占净值比例 | `fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc` |
-| 基金行业配置 | `api.fund.eastmoney.com/f10/HYPZ/` |
-| 个股行业与概念 | `push2.eastmoney.com/api/qt/ulist.np/get` |
-| 个股实时价格（A 股 + 港股，一次请求批量） | `qt.gtimg.cn/q=sh600519,sz000858,hk00700` |
-| 基金搜索 | `fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx` |
-
-都是公开接口，不需要 key；请控制频率，别把人家打挂。
+- **菜单栏速览** — 直接显示持仓收益或自选平均涨跌，点击展开基金列表，再点一只基金进入详情。
+- **盘中估值** — 根据季报重仓股与最新股票行情推算涨跌；当日净值公布并更新后，自动显示已公布净值。
+- **自选管理** — 按代码或名称搜索添加，拖动调整顺序，右键移出列表。
+- **净值走势** — 查看近 1 月、3 月、6 月或 1 年的历史净值，支持曲线与每日列表，悬停查看数值。
+- **持仓收益** — 手动录入份额与成本价，查看当日收益、累计收益和持仓市值。
+- **持仓与行业** — 查看季报重仓股、行业配置，以及个股所属行业和概念。
+- **融入 macOS** — 毛玻璃侧栏、自适应深色模式、可调侧栏宽度，支持登录时自动启动。
 
 ## 安装
 
-从 [Releases](https://github.com/Alickx/mygo-fundbar/releases) 下载 `fundbar-<version>.dmg`，拖进 Applications。
+支持 **Apple Silicon 与 Intel Mac**，使用同一个通用安装包。
 
-当前是 **ad-hoc 签名**（没有 Apple 公证），从网上下载后首次打开会被 Gatekeeper 拦下，一条命令放行：
+1. 前往 [Releases](https://github.com/Alickx/mygo-fundbar/releases) 下载 `.dmg` 文件。
+2. 打开安装包，将 **FundBar** 拖入 **Applications（应用程序）**。
+3. 启动 FundBar，在菜单栏找到应用图标。
+
+<details>
+<summary>首次打开被 macOS 拦截？</summary>
+
+当前默认构建使用 ad-hoc 签名，尚未经过 Apple 公证。确认安装包来自本仓库后，可在终端执行以下命令，再重新打开应用：
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/FundBar.app
 ```
 
-自己本地构建的副本没有 quarantine 属性，直接双击即可。
+</details>
 
-## 从源码构建
+## 快速上手
 
-需要 Go 1.27.3+：
+1. **添加基金**：在左侧搜索框输入基金代码或名称，选择搜索结果加入自选。
+2. **查看详情**：点击自选基金，查看净值走势、重仓股与行业配置。
+3. **录入持仓**：在「我的持仓」中点击「录入持仓」，填写持有份额和每份成本价。
+4. **随时速览**：关闭主窗口后，应用继续留在菜单栏。点击图标查看概览，右键打开刷新、设置与退出菜单。
+
+在设置中可开启登录时自动启动、清空缓存或打开本地数据目录。
+
+| 快捷键 | 操作 |
+| --- | --- |
+| `⌘ R` | 刷新数据 |
+| `⌘ ,` | 打开设置 |
+| `⌘ W` | 关闭主窗口，保留菜单栏运行 |
+| `⌘ Q` | 退出应用 |
+
+快捷键在应用窗口处于活动状态时使用。
+
+## 关于估值与数据
+
+FundBar 使用天天基金 / 东方财富的基金资料与历史净值，以及腾讯财经的股票行情。盘中估值由最新可获取季报中的前十大重仓股加权推算，依赖已披露持仓，可能与基金实际净值存在偏差。
+
+当可用于估算的重仓股占基金净资产比例不足 **20%** 时，应用仅显示已公布净值。ETF 联接、QDII 等基金可能因此没有盘中估值。交易时段约每分钟刷新行情，其余时间约每 15 分钟刷新。
+
+自选列表、手动录入的持仓与数据缓存保存在本机：
+
+```text
+~/Library/Application Support/FundBar/
+```
+
+估值方法、显示规则与接口清单见 [数据与估值说明](docs/DATA.md)。
+
+> 估值仅供参考，实际净值以基金公司公布为准。本项目不构成投资建议。
+
+## 从源码运行
+
+在 macOS 上安装 **Go 1.27.3 或更新版本**，然后运行：
 
 ```sh
-go run .                                        # 开发，直接跑
-go tool mygo build -platform darwin/universal   # 出 .app 和 dmg
-open build/darwin-universal/FundBar.app
+git clone https://github.com/Alickx/mygo-fundbar.git
+cd mygo-fundbar
+go run .
 ```
 
-产物在 `build/darwin-universal/`：`FundBar.app`（24 MB，arm64 + x86_64 通用二进制）和 `fundbar-0.2.1.dmg`（8 MB）。
-
-自选基金存在 `~/Library/Application Support/FundBar/funds.json`，抓到的数据缓存在同目录 `cache/`，删掉即可重来。
-
-### 签名与公证
-
-默认 `-sign -`（ad-hoc），只保证本机能跑。要让别人下载后直接双击就能打开，需要 Apple Developer Program 的 Developer ID 证书：
+构建 macOS 通用应用与安装包：
 
 ```sh
-# 列出本机可用的签名身份
-security find-identity -v -p codesigning
-
-go tool mygo build -platform darwin/universal \
-  -sign "Developer ID Application: Your Name (TEAMID)"
+go tool mygo build -platform darwin/universal
 ```
 
-公证则在 `mygo.json` 里加 `"macos": {"notarize": {"keychainProfile": "AC_PASSWORD"}}`，凭据用 `xcrun notarytool store-credentials` 存好。
+产物位于 `build/darwin-universal/`。测试、调试工具与签名发布流程见 [开发指南](docs/DEVELOPMENT.md)。
 
-CI 已经预留了这条路：在仓库 Secrets 里放 `MACOS_SIGNING_IDENTITY`、`MACOS_CERT_P12`（base64）、`MACOS_CERT_PASSWORD`，工作流会自动导入证书并签名；这些 secret 不存在时构建 ad-hoc 版本。
+## 参与贡献
 
-## 自动构建
+欢迎通过 [Issues](https://github.com/Alickx/mygo-fundbar/issues) 反馈问题、提出建议，或提交 [Pull Request](https://github.com/Alickx/mygo-fundbar/pulls) 改进项目。
 
-`.github/workflows/build.yml` 在 macOS runner 上：
+反馈问题时，请附上 macOS 版本、FundBar 版本和复现步骤；涉及数据显示时，请一并说明基金代码与数据日期。提交代码前，请按 [开发指南](docs/DEVELOPMENT.md#质量检查) 完成本地检查。
 
-1. `gofmt -l` / `go vet` / `mygo vet` / `go test` 全部通过才继续
-2. 构建通用二进制（arm64 + x86_64）和 dmg
-3. `codesign --verify --deep --strict` 校验签名
-4. 上传 artifact（dmg + app）
-5. 打 `v*` tag 时自动建一个 draft Release，附上 dmg
+## 致谢
 
-```sh
-git tag v0.2.1 && git push origin v0.2.1
-```
-
-## 开发
-
-```sh
-go test ./...                          # 单元测试（估值算法、接口解析、界面构建）
-go tool mygo vet .                     # 检查 native UI 的构建生命周期
-go tool mygo build -debug              # 保留开发特性
-go run ./tools/probe 161725 005827     # 对比估算值和公布净值
-go run ./tools/shot /tmp/shot.png      # 不开窗口，把界面渲染成 PNG
-                                       # 参数：dark | settings | edit | search | empty
-FUNDBAR_DIR=/tmp/preview FUNDBAR_W=900 go run ./tools/shot /tmp/narrow.png
-go run ./tools/genicon                 # 重新生成 resources/ 下的图标
-```
-
-代码结构：
-
-```
-main.go                    窗口 / 菜单栏图标 / 应用菜单
-internal/model/            数据类型与估值算法（纯函数）
-internal/source/           天天基金、腾讯行情的适配器
-internal/store/            funds.json 与缓存
-internal/app/app.go        状态、刷新调度、汇总
-internal/app/view.go       界面
-internal/app/chart.go      净值曲线
-internal/app/window.go     菜单栏菜单、菜单动作
-tools/probe                估值精度自查
-tools/shot                 离屏渲染截图
-tools/genicon              生成菜单栏图标和 App 图标
-```
-
-界面用 MyGo 的原生 UI（Go 直接画，没有 webview、没有 JS），所以启动快、内存低。
-
-刷新频率：交易时段约 50–60 秒，其余时间 15 分钟；基金档案（历史净值、重仓股）20 分钟才重新拉一次，每次刷新只发一个批量行情请求。
-
-## 免责
-
-估值由季报重仓股推算，**不是官方数据**，仅供参考。实际净值以基金公司公布为准。本项目不构成任何投资建议。
+- [MyGo](https://github.com/egoist/mygo) — 提供 Go 原生桌面 UI 框架。
+- 天天基金、东方财富与腾讯财经 — 提供应用使用的基金资料与行情数据。
 
 ## License
 
-MIT
+项目代码采用 [MIT License](https://opensource.org/license/mit)。第三方数据的使用受各提供方条款约束。
