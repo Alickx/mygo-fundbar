@@ -27,6 +27,10 @@ type Fund struct {
 	Type   string
 	Shares float64
 	Cost   float64
+	// sharesText and costText are the holding form's fields as typed, which
+	// the frame after the edit opens fills in from the values.
+	sharesText, costText string
+	editText             bool
 	// Groups are the groups the fund is listed in: "" is the holding group,
 	// the main list of funds the user holds or follows, and any other id is
 	// a group the user made to watch funds without holding them.

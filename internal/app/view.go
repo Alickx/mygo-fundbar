@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -825,7 +826,7 @@ func (a *App) stats(c *ui.Context, t *ui.Theme, f *Fund) {
 			{"累计收益", signedMoney(f.TotalProfit()), pct(f.TotalPct()),
 				up(t, f.TotalProfit())},
 			{"持仓市值", money(f.Value()),
-				fmt.Sprintf("%s 份", trim(f.Shares, 2)), t.Text},
+				fmt.Sprintf("%s 份", trim(f.Shares, 4)), t.Text},
 		}
 	} else {
 		// Without shares, the fund's own numbers are what the user came for.
@@ -1021,6 +1022,10 @@ func stockProfileLine(p model.StockProfile) string {
 // only until they ask to edit them.
 func (a *App) holdingSection(c *ui.Context, t *ui.Theme, f *Fund) {
 	holding := f.Shares > 0
+	if !a.editing {
+		// The fields fill in from the values as the edit opens.
+		f.editText = false
+	}
 	body := card(c, t)
 	body.Padding(8, 15).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
@@ -1030,7 +1035,7 @@ func (a *App) holdingSection(c *ui.Context, t *ui.Theme, f *Fund) {
 			case a.editing:
 				note = "修改自动保存"
 			case holding:
-				note = fmt.Sprintf("%s 份 · 成本 %.4f", trim(f.Shares, 2), f.Cost)
+				note = fmt.Sprintf("%s 份 · 成本 %.4f", trim(f.Shares, 4), f.Cost)
 			}
 			ui.Text(c, note).FontSize(11.5).TextColor(t.TextMuted).FontFeatures("tnum").
 				Grow(1).Basis(0).SingleLine().Ellipsis("…").Tooltip(note)
@@ -1055,18 +1060,25 @@ func (a *App) holdingSection(c *ui.Context, t *ui.Theme, f *Fund) {
 		form.Height(h)
 		if h > 1 {
 			form.Children(func() {
+				if !f.editText {
+					f.sharesText = trim(f.Shares, 4)
+					f.costText = trim(f.Cost, 4)
+					f.editText = true
+				}
 				ui.Row(c).Padding(12, 0, 0, 0).Gap(18).AlignItems(ui.End).Children(func() {
 					ui.Column(c).Gap(5).Grow(1).Basis(0).Children(func() {
 						ui.Text(c, "持有份额").FontSize(11.5).TextColor(t.TextMuted)
-						if ui.NumberInput(c, &f.Shares, 0, 1e10, 100).
-							Label("持有份额输入").Changed() {
+						if ui.TextInput(c, &f.sharesText).Placeholder("0.00").
+							Label("持有份额输入").Changed() &&
+							readNumber(f.sharesText, &f.Shares, 0, 1e10) {
 							a.changed()
 						}
 					})
 					ui.Column(c).Gap(5).Grow(1).Basis(0).Children(func() {
 						ui.Text(c, "成本价").FontSize(11.5).TextColor(t.TextMuted)
-						if ui.NumberInput(c, &f.Cost, 0, 1e6, 0.0001).
-							Label("成本价输入").Changed() {
+						if ui.TextInput(c, &f.costText).Placeholder("0.0000").
+							Label("成本价输入").Changed() &&
+							readNumber(f.costText, &f.Cost, 0, 1e6) {
 							a.changed()
 						}
 					})
@@ -1078,6 +1090,19 @@ func (a *App) holdingSection(c *ui.Context, t *ui.Theme, f *Fund) {
 
 // holdingFormHeight is the room the fields take, which the section opens to.
 const holdingFormHeight = 74
+
+// readNumber reads a field's text as a number between lo and hi into v, and
+// reports whether it did: text that is empty, not a number, or out of range
+// leaves v as it was.
+func readNumber(text string, v *float64, lo, hi float64) bool {
+	s := strings.ReplaceAll(strings.TrimSpace(text), ",", "")
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(n) || n < lo || n > hi {
+		return false
+	}
+	*v = n
+	return true
+}
 
 // trim writes a number with at most n decimals, and none that are zero.
 func trim(v float64, n int) string {

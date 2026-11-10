@@ -326,3 +326,61 @@ func TestYoungFundDrawsTheWiderWindow(t *testing.T) {
 		t.Fatalf("windows open at %v and %v, history at %v", start12, start6, first)
 	}
 }
+
+func TestNumberReadsTheHoldingFields(t *testing.T) {
+	cases := []struct {
+		text string
+		want float64
+		ok   bool
+	}{
+		{"1203.47", 1203.47, true},
+		{" 1,203.5 ", 1203.5, true},
+		{"0", 0, true},
+		// Text that is not a number in range leaves the value as it was.
+		{"", 7, false},
+		{"0.00.", 7, false},
+		{"-1", 7, false},
+		{"1e11", 7, false},
+	}
+	for _, c := range cases {
+		v := 7.0
+		if ok := readNumber(c.text, &v, 0, 1e10); ok != c.ok || v != c.want {
+			t.Errorf("readNumber(%q) = %v, %v; want %v, %v", c.text, v, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestHoldingFieldsTakeDecimals(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	f.Shares, f.Cost = 0, 0
+	a.editing = true
+	build := func(c *ui.Context) {
+		t := theme(c)
+		c.SetTheme(t)
+		a.holdingSection(c, t, f)
+	}
+	tt := ui.NewTester(build, 760, 220)
+	tt.Frame()
+	tt.Frame()
+
+	if err := tt.Click("持有份额输入"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("1203.47")
+	tt.Frame()
+	if f.Shares != 1203.47 {
+		t.Fatalf("shares = %v, want 1203.47", f.Shares)
+	}
+
+	if err := tt.Click("成本价输入"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("1.2467")
+	tt.Frame()
+	if f.Cost != 1.2467 {
+		t.Fatalf("cost = %v, want 1.2467", f.Cost)
+	}
+}
