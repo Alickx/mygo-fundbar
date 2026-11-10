@@ -87,7 +87,7 @@ go tool mygo build -platform darwin/universal   # 出 .app 和 dmg
 open build/darwin-universal/FundBar.app
 ```
 
-产物在 `build/darwin-universal/`：`FundBar.app`（24 MB，arm64 + x86_64 通用二进制）和 `fundbar-0.2.0.dmg`（8 MB）。
+产物在 `build/darwin-universal/`：`FundBar.app`（24 MB，arm64 + x86_64 通用二进制）和 `fundbar-0.2.1.dmg`（8 MB）。
 
 自选基金存在 `~/Library/Application Support/FundBar/funds.json`，抓到的数据缓存在同目录 `cache/`，删掉即可重来。
 
@@ -118,7 +118,7 @@ CI 已经预留了这条路：在仓库 Secrets 里放 `MACOS_SIGNING_IDENTITY`�
 5. 打 `v*` tag 时自动建一个 draft Release，附上 dmg
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.2.1 && git push origin v0.2.1
 ```
 
 ## 开发
