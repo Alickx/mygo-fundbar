@@ -34,6 +34,21 @@ func TestEstimateFund(t *testing.T) {
 	}
 }
 
+func TestHoldingMarket(t *testing.T) {
+	cases := map[string]string{
+		"sh600519": "",
+		"sz000858": "",
+		"hk00700":  "hk",
+		"usAAPL":   "us",
+		"":         "", // a foreign stock the data does not name
+	}
+	for symbol, want := range cases {
+		if got := (Holding{Symbol: symbol}).Market(); got != want {
+			t.Errorf("Market(%q) = %q, want %q", symbol, got, want)
+		}
+	}
+}
+
 func TestEstimateFundNeedsAQuote(t *testing.T) {
 	if _, ok := EstimateFund([]Holding{{Symbol: "sh600519", Weight: 10}}, nil); ok {
 		t.Fatal("expected no estimate without quotes")

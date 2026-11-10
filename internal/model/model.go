@@ -4,6 +4,7 @@ package model
 
 import (
 	"math"
+	"strings"
 	"time"
 )
 
@@ -15,6 +16,20 @@ type Holding struct {
 	Name   string
 	// Weight is the stock's share of the fund's net assets, in percent.
 	Weight float64
+}
+
+// Market names the exchange a holding trades on, when it is not the
+// mainland's: "hk" for Hong Kong, "us" for the United States. A holding of
+// the mainland's exchanges, and one whose exchange the data does not name,
+// is "" and needs no mark.
+func (h Holding) Market() string {
+	switch {
+	case strings.HasPrefix(h.Symbol, "hk"):
+		return "hk"
+	case strings.HasPrefix(h.Symbol, "us"):
+		return "us"
+	}
+	return ""
 }
 
 // Nav is one day's net asset value of a fund.

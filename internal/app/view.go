@@ -430,6 +430,13 @@ func (a *App) updatedText() string {
 	return "更新于 " + a.updated.In(cst).Format("15:04:05")
 }
 
+// copyToClipboard puts text on the clipboard, and says what was copied, so
+// that a click leaves a mark the user can see.
+func copyToClipboard(c *ui.Context, what, text string) {
+	c.WriteClipboard(text)
+	c.Toast("已复制" + what + "：" + text)
+}
+
 func (a *App) detailTitle(c *ui.Context, t *ui.Theme, f *Fund) {
 	change := f.ChangePct()
 	label, color := "已公布净值", t.TextMuted
@@ -448,11 +455,21 @@ func (a *App) detailTitle(c *ui.Context, t *ui.Theme, f *Fund) {
 				if name == "" {
 					name = f.Code
 				}
-				ui.Text(c, name).FontSize(19).FontWeight(600)
+				// The name and the code copy themselves, as the user may be off
+				// to look the fund up elsewhere.
+				nameText := ui.Text(c, name).FontSize(19).FontWeight(600).
+					Cursor(ui.CursorPointer).Tooltip("点击复制基金名称")
+				if nameText.Clicked() {
+					copyToClipboard(c, "名称", name)
+				}
 				ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-					ui.Text(c, f.Code).FontSize(11).TextColor(t.TextMuted).
+					codeText := ui.Text(c, f.Code).FontSize(11).TextColor(t.TextMuted).
 						FontFeatures("tnum").Padding(1, 6).Radius(5).
-						Background(t.SurfaceHover)
+						Background(t.SurfaceHover).Cursor(ui.CursorPointer).
+						Tooltip("点击复制基金代码")
+					if codeText.Clicked() {
+						copyToClipboard(c, "代码", f.Code)
+					}
 					if f.Type != "" {
 						pill(c, f.Type, t.TextMuted, t.Text.Alpha(0.06))
 					}
@@ -618,7 +635,11 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 				}
 				row.Children(func() {
 					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(1).Children(func() {
-						ui.Text(c, h.Name).FontSize(12).SingleLine().Ellipsis("…").Tooltip(h.Name)
+						ui.Row(c).Gap(5).NoWrap().AlignItems(ui.Center).Children(func() {
+							ui.Text(c, h.Name).FontSize(12).SingleLine().Ellipsis("…").
+								Tooltip(h.Name).Shrink(1).MinWidth(0)
+							marketTag(c, t, h)
+						})
 						p := f.Profiles[h.Symbol]
 						if line := stockProfileLine(p); line != "" {
 							detail := ui.Text(c, line).FontSize(10.5).
@@ -639,6 +660,22 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			}
 		})
 	})
+}
+
+// marketTag marks a holding that trades abroad, beside its name: another
+// exchange than the fund's own matters when the user compares the stock's
+// price. A holding of the mainland's exchanges needs no mark.
+func marketTag(c *ui.Context, t *ui.Theme, h model.Holding) {
+	label, fg := "", t.Accent
+	switch h.Market() {
+	case "hk":
+		label = "港股"
+	case "us":
+		label, fg = "美股", t.Warning
+	default:
+		return
+	}
+	pill(c, label, fg, fg.Alpha(0.12)).Shrink(0)
 }
 
 // industriesCard shows the fund's allocation by industry, and how much of it

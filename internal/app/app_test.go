@@ -189,6 +189,58 @@ func TestIndustryAndStockProfileAreShown(t *testing.T) {
 	}
 }
 
+func TestDetailTitleCopiesTheNameAndCode(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	build := func(c *ui.Context) {
+		t := theme(c)
+		c.SetTheme(t)
+		a.detailTitle(c, t, f)
+	}
+	tt := ui.NewTester(build, 760, 220)
+	tt.Frame()
+
+	if err := tt.Click(f.Code); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if got := tt.Clipboard(); got != f.Code {
+		t.Fatalf("clipboard = %q, want the fund code %q", got, f.Code)
+	}
+	if !tt.HasText("已复制代码") {
+		t.Fatalf("expected a note that the code was copied, got %v", tt.Texts())
+	}
+
+	if err := tt.Click(f.Name); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if got := tt.Clipboard(); got != f.Name {
+		t.Fatalf("clipboard = %q, want the fund name %q", got, f.Name)
+	}
+}
+
+func TestHoldingsMarkMarketsAbroad(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	f.Holdings = append([]model.Holding{
+		{Symbol: "hk00700", Code: "00700", Name: "腾讯控股", Weight: 8.12},
+		{Symbol: "usAAPL", Code: "AAPL", Name: "苹果", Weight: 4.21},
+	}, f.Holdings...)
+	f.Quotes = map[string]model.Quote{
+		"hk00700": {Symbol: "hk00700", Pct: 1.24, At: time.Now()},
+		"usAAPL":  {Symbol: "usAAPL", Pct: -0.42, At: time.Now()},
+	}
+	a.estimate(f, nil)
+	tt := ui.NewTester(a.View, 1080, 1180)
+	tt.Frame()
+	for _, text := range []string{"腾讯控股", "港股", "苹果", "美股", "贵州茅台"} {
+		if !tt.HasText(text) {
+			t.Fatalf("missing %q in the holdings, got %v", text, tt.Texts())
+		}
+	}
+}
+
 func TestMoneyAndPadding(t *testing.T) {
 	if got := money(1234567.891); got != "1,234,567.89" {
 		t.Fatalf("money = %q", got)
