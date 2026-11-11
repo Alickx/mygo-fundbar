@@ -1,0 +1,55 @@
+{
+  "generated_at": "2026-11-11T09:13:54.121662Z",
+  "version": "0.4.1",
+  "renderer": "Current app.View and app.Panel, MyGo offscreen at 2x; panel material simulated; no image generation service",
+  "holdings": "Demo only: 1000 shares per fund, cost equal to its latest cached published NAV; real user holdings are not read",
+  "source_sha256": {
+    "go.mod": "43ad7b274a8303b949cd9bb8905162231616aa51c4c4a72b3b82f992310e51c5",
+    "go.sum": "975e1f5b6d7e6e138dddf44c173df5ed1e7aa70395eaad482ed955dfd417c3b7",
+    "internal/app/app.go": "0bd94296afb1bf7be250e56d04e6b07394f7716c45ac287e57367e9f60470c80",
+    "internal/app/chart.go": "43d8424797e3ebf5ffff49c73b9f44f80e5032d0d8768e5669a59a124bce4f91",
+    "internal/app/debug.go": "98c7e2b48f1bc3cb3f418516d71945810fd38c9d7c63e8c9b7b2a4f3dd682158",
+    "internal/app/groups.go": "1a964a2df3a52a29cbb759aa2a7ecf52cd7ea31a65b41b9f3b07bf73196f6534",
+    "internal/app/panel.go": "0b63c9877b5e0cc648f02d2b811d127b88500f1908682e0f4d0c9f929de1f3c8",
+    "internal/app/settings.go": "0a59a53315592e6d7877e41564725ed0bc117778f2da1cb25950289c82f67890",
+    "internal/app/update.go": "c74d3b4141e39965c5394e5c151c35f9623d5e6177a5c90d359d45d1c5061c0e",
+    "internal/app/view.go": "1d32f0692a9456ae410a5946ca5119cebc917bd9a06f85fc9773df0e17851964",
+    "internal/app/window.go": "153abc560344654816ad64dc7cee258c631c0b73ceec5dba76f730a3f38de58a",
+    "internal/model/model.go": "cbe5e9039c55ace0d9981b481b365649d678d2a356d7b898eb20f928dbd32160",
+    "internal/source/source.go": "90c8e7874969a59d400d82ec0c394458604e59f7c44560b01447c9058f5e1ead",
+    "internal/store/store.go": "2023327b15404d3f00d489ab55cbfe07ac92e28e8b03fa7e92b577b9019c1a27",
+    "mygo.json": "ff6673215e82dce5c183bfb38069484f01535d42a1c06dea11cdd85998da53b1",
+    "resources/icon.png": "12106a79fc6e3e4c1bb37ef3dcb039010552556dba36a3f5e739ab191b014ded",
+    "tools/promo/main.go": "661ee96cedfb9e543733e708a3f1a26d85338febb51196307fcefe85ff350831"
+  },
+  "snapshots": [
+    {
+      "code": "011555",
+      "cached_at": "2026-11-11T16:47:11.181722+08:00",
+      "sha256": "3a25950b00f3a206dbcd8c977a3dd0c5c1513f22adc2171e857d7df049d7b039"
+    },
+    {
+      "code": "007760",
+      "cached_at": "2026-11-11T16:47:11.367475+08:00",
+      "sha256": "dc818512a7e2ae611ca62cd8830b38aa0000b3083277193d0230a7f7e3d4084a"
+    },
+    {
+      "code": "008270",
+      "cached_at": "2026-11-11T16:47:11.243666+08:00",
+      "sha256": "606daf5bae98a1725fc27a5f0c250e3bc0474794a97818109cc512b42dcbafa0"
+    },
+    {
+      "code": "028678",
+      "cached_at": "2026-11-11T16:47:11.331483+08:00",
+      "sha256": "c54fba670d2da5c102a4bae9a34be5b44d9f6da6e2d320a46a7bf8edd5e6d0a1"
+    }
+  ],
+  "image_sha256": {
+    "hero-dark.png": "8859a278aec01150cea431a777258dbbd62b0707c066062a606073e4f5d73a1c",
+    "hero-light.png": "46afc3bde541d56f44f74a32e09e605b6449435e90aab460f79e9ab421cb450e",
+    "main-dark.png": "6ed29d5319a806d75c349a10dce663f14348c8c5685dec87c7045303007c7f16",
+    "main-light.png": "6f6efdb35fc4062243491006945c1871aa0f80f402fdcf56b2e05fc4f2d08dbd",
+    "panel-dark.png": "18e0897ce398dd1bde63a1dd1c59ec1d399083557e315c59f7c384340af95f1d",
+    "panel-light.png": "66610c4521d90f128bdd4872b5639bac5023810b4e8069aed1c34c581e0e70b4"
+  }
+}

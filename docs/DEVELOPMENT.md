@@ -85,6 +85,14 @@ FUNDBAR_DIR=/tmp/fundbar-preview FUNDBAR_W=900 FUNDBAR_H=600 \
 
 `FUNDBAR_DIR` 指定截图工具读取的数据目录；`FUNDBAR_W`、`FUNDBAR_H` 设置主窗口截图尺寸。设置窗口截图使用固定尺寸。
 
+### 更新 README 宣传图
+
+```sh
+go run ./tools/promo
+```
+
+直接用当前源码渲染浅色 / 深色主界面与菜单栏小窗，并以 2 倍分辨率合成海报，输出到 `docs/promo/`。全程本地执行；读取行情缓存，使用独立的示例持仓配置。修改 UI 后运行此命令即可同步宣传图。输入缓存、参数、截图口径与产物说明见 [宣传图生成指南](promo/README.md)。
+
 ### 生成图标
 
 ```sh
@@ -106,6 +114,7 @@ resources/           应用图标与菜单栏图标
 tools/
   probe/             估值对比工具
   shot/              离屏截图工具
+  promo/             当前界面截图与 README 宣传图生成器
   genicon/           图标生成工具
 mygo.json            应用元数据与打包配置
 ```

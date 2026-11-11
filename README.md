@@ -1,12 +1,8 @@
-<p align="center">
-  <img src="resources/icon.png" width="96" height="96" alt="FundBar 图标">
-</p>
-
 <h1 align="center">FundBar</h1>
 
 <p align="center">
-  <strong>在 Mac 菜单栏，关注你的基金。</strong><br>
-  盘中估值、自选基金、净值走势与持仓收益，抬眼可见。
+  <strong>基金动态，抬眼可见。</strong><br>
+  一款开源的 macOS 菜单栏基金工具。随时速览涨跌，需要时展开细节。
 </p>
 
 <p align="center">
@@ -16,41 +12,41 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Alickx/mygo-fundbar/releases">下载应用</a> ·
+  <a href="https://github.com/Alickx/mygo-fundbar/releases"><strong>下载 macOS 版</strong></a> ·
+  <a href="#功能亮点">功能亮点</a> ·
   <a href="#快速上手">快速上手</a> ·
   <a href="docs/DEVELOPMENT.md">开发指南</a> ·
   <a href="https://github.com/Alickx/mygo-fundbar/issues">反馈问题</a>
 </p>
 
----
-
-FundBar 是一款开源的 macOS 菜单栏基金工具。把关心的基金加入自选，即可查看盘中估值、已公布净值和历史走势；录入持有份额与成本价后，还能随时了解持仓收益。
-
-应用使用 Go 与 [MyGo](https://github.com/egoist/mygo) 构建原生界面，支持浅色与深色外观，无需注册账号或配置 API Key。
-
-## 界面预览
-
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/screenshot.png">
-  <img src="docs/screenshot.png" width="1080" alt="FundBar 主界面：左侧自选基金，右侧展示基金净值、历史走势与季报重仓股">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/promo/hero-dark.png">
+  <img src="docs/promo/hero-light.png" width="1600" alt="FundBar：基金动态，抬眼可见。当前主界面展示自选分组、持仓收益、净值走势与行业配置，右侧菜单栏小窗可随时速览基金涨跌。">
 </picture>
 
 <p align="center">
-  <sub>浅色与深色外观随系统切换；截图仅用于界面展示。</sub>
+  <sub>当前界面渲染与代码排版，使用示例持仓及缓存行情；盘中估值不等于实际净值。</sub><br>
+  <a href="docs/promo/main-light.png">浅色界面原图</a> ·
+  <a href="docs/promo/main-dark.png">深色界面原图</a> ·
+  <a href="docs/promo/README.md">宣传图生成方式</a>
 </p>
+
+工作时看一眼菜单栏，就能了解持仓收益或自选平均涨跌。点击展开小窗，再点一只基金，即可查看走势、持仓与行业配置。
+
+**无需注册，无需配置 API Key。** 添加基金即可开始使用，自选与手动录入的持仓保存在本机。基于 Go 与 [MyGo](https://github.com/egoist/mygo) 构建原生界面，支持 Apple Silicon 与 Intel Mac。
 
 ## 功能亮点
 
-- **菜单栏速览** — 直接显示持仓收益或自选平均涨跌，点击展开基金列表，再点一只基金进入详情。
-- **盘中估值** — 根据季报重仓股与最新股票行情推算涨跌；当日净值公布并更新后，自动显示已公布净值。
-- **自选管理** — 按代码或名称搜索添加，拖动调整顺序，右键移出列表。
-- **自选分组** — 在「持有」之外新建关注分组，只看涨幅、不记持仓；状态栏小窗与主面板都能切换分组，分组较多时自动收进「⋯」菜单，菜单栏收益始终只统计持有分组。
-- **净值走势** — 查看近 1 月、3 月、6 月或 1 年的历史净值，支持曲线与每日列表，悬停查看数值。
-- **持仓收益** — 手动录入份额与成本价，查看当日收益、累计收益和持仓市值。
-- **持仓与行业** — 查看季报重仓股、行业配置，以及个股所属行业和概念。
-- **融入 macOS** — 毛玻璃侧栏、自适应深色模式、可调侧栏宽度，支持登录时自动启动。
-- **自动更新** — 启动后在后台检查 GitHub 上的新版本，主界面顶部出现一行提示：一键下载并校验签名，下载完成后重启应用即用上新版本；也可以稍后再说或忽略该版本。
+| 想了解什么 | FundBar 帮你看 |
+| --- | --- |
+| **今天表现如何** | 菜单栏显示持仓收益或自选平均涨跌，点击展开基金小窗。 |
+| **盘中大致涨跌** | 根据季报重仓股与最新行情推算估值，当日净值更新后切换为已公布净值。 |
+| **持有和关注哪些** | 按名称或代码搜索添加，拖动排序；用分组区分持有与关注，小窗和主面板都能切换。 |
+| **最近走势怎样** | 查看近 1 月、3 月、6 月、1 年的历史净值，支持走势图、悬停数值和每日列表。 |
+| **持仓赚亏多少** | 录入份额与每份成本价，查看当日收益、累计收益及持仓市值。菜单栏收益只统计持有分组。 |
+| **基金投向哪里** | 展示季报重仓股、行业配置，以及个股的行业与概念信息。 |
+
+也照顾日常使用的小细节：浅色 / 深色外观随系统切换、毛玻璃侧栏、可调侧栏宽度、登录时自动启动，以及内置的版本检查与更新。
 
 ## 安装
 
