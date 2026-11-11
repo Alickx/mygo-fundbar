@@ -60,12 +60,23 @@ jobs:
           rm /tmp/cert.p12
 
       - name: Build
+        env:
+          # Signs the update archive and writes the update manifest with it:
+          #   go tool mygo keygen   # once, locally
+          #   gh secret set MYGO_UPDATER_PRIVATE_KEY < path/to/mygo-update.key
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          # Delta updates download the published archives.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "$SIGN_IDENTITY" ]; then
             go tool mygo build -platform darwin/universal -sign "$SIGN_IDENTITY"
           else
             go tool mygo build -platform darwin/universal
           fi
+
+      - name: Verify update files
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test -f build/darwin-universal/update-darwin-universal.json
 
       - name: Verify signature
         run: codesign --verify --deep --strict --verbose=2 build/darwin-universal/FundBar.app
@@ -76,6 +87,9 @@ jobs:
           if-no-files-found: error
           path: |
             build/darwin-universal/*.dmg
+            build/darwin-universal/*.tar.gz
+            build/darwin-universal/update-*.json
+            build/darwin-universal/*.delta
             build/darwin-universal/*.app
 
       - name: Release
@@ -84,4 +98,10 @@ jobs:
         with:
           draft: false
           generate_release_notes: true
-          files: build/darwin-universal/*.dmg
+          # The archive and the manifest are what installed apps update from,
+          # and they read them from the latest release: upload all of them.
+          files: |
+            build/darwin-universal/*.dmg
+            build/darwin-universal/*.tar.gz
+            build/darwin-universal/update-*.json
+            build/darwin-universal/*.delta

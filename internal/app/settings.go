@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/ui"
 
 	"fundbar/internal/store"
@@ -93,7 +94,13 @@ func (a *App) settingsView(c *ui.Context) {
 				ui.Textf(c, "FundBar %s", a.version()).FontSize(12).
 					FontWeight(500)
 				ui.Text(c, "· MIT").FontSize(12).TextColor(t.TextMuted)
+				if v := a.availableVersion(); v != "" {
+					ui.Text(c, "新版本 "+v).FontSize(12).TextColor(t.Accent)
+				}
 				ui.Spacer(c)
+				if ui.Button(c, "检查更新").Shrink(0).Clicked() {
+					updater.CheckForUpdates()
+				}
 				ui.Link(c, "GitHub", "https://github.com/Alickx/mygo-fundbar").
 					FontSize(12)
 			})
@@ -124,7 +131,17 @@ func (a *App) version() string {
 
 // previewVersion is what a window drawn without a running app shows, as
 // tools/shot draws one; mygo.json holds the version of a build.
-const previewVersion = "0.3.0"
+const previewVersion = "0.4.0"
+
+// availableVersion is the newer version the updater found, or "" before a
+// check, after one that found nothing, and for a version the user skipped.
+// A window drawn without a running app has no updater.
+func (a *App) availableVersion() string {
+	if !mygo.App.IsReady() {
+		return ""
+	}
+	return updater.AvailableVersion()
+}
 
 // openAtLogin starts the app at login, or stops it, as the user asked.
 func (a *App) openAtLogin(on bool) {

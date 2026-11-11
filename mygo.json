@@ -2,11 +2,15 @@
   "name": "FundBar",
   "slug": "fundbar",
   "identifier": "app.fundbar.desktop",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "license": "MIT",
   "copyright": "© 2026 FundBar contributors",
   "publisher": "FundBar contributors",
   "out": "build",
+  "updates": {
+    "publicKey": "Gpvhw7WsGkeVrZa00F0vVVJP943QMdM+pd7mAVRZzBw=",
+    "github": "Alickx/mygo-fundbar"
+  },
   "macos": {
     "infoPlist": {
       "LSUIElement": true

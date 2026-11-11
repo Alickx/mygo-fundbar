@@ -36,6 +36,15 @@ open build/darwin-universal/FundBar.app
 
 输出位于 `build/darwin-universal/`，包括通用应用 `FundBar.app` 和 `fundbar-<version>.dmg`，支持 Apple Silicon 与 Intel Mac。
 
+带上更新签名私钥时，还会写出安装应用可直接更新的文件：`fundbar-<version>-darwin-universal.tar.gz`（安装后的应用）、`update-darwin-universal.json`（版本、说明、下载地址与签名）以及从最近几个版本升级的 `*.delta` 增量。
+
+```sh
+MYGO_UPDATER_PRIVATE_KEY="$(cat ~/Library/Application\ Support/mygo/update-keys/mygo-update.key)" \
+  go tool mygo build -platform darwin/universal
+```
+
+没有私钥时只警告、不生成这些文件（本地开发无需配置）。
+
 保留开发特性的构建：
 
 ```sh
@@ -128,9 +137,50 @@ Apple 公证需要单独配置。使用 `xcrun notarytool store-credentials` 保
 [`build.yml`](../.github/workflows/build.yml) 在推送到 `main`、推送 `v*` 标签、提交 Pull Request 或手动触发时运行：
 
 1. 检查格式、静态分析与测试。
-2. 构建 macOS 通用应用与 DMG。
+2. 构建 macOS 通用应用与 DMG，并签名更新包与更新清单。
 3. 使用 `codesign --verify --deep --strict` 校验签名。
 4. 上传应用与安装包作为构建产物。
-5. 对 `v*` 标签创建附带 DMG 的 Release，直接发布。
+5. 对 `v*` 标签创建 Release，附带 DMG、更新归档、更新清单与增量包。
 
 配置仓库 Secrets `MACOS_SIGNING_IDENTITY`、`MACOS_CERT_P12`（base64）和 `MACOS_CERT_PASSWORD` 后，CI 会导入证书并签名；未配置时使用 ad-hoc 签名。当前工作流没有配置公证凭据的执行步骤，发布公证版本时还需补齐该流程。
+
+## 自动更新
+
+应用从 GitHub Release 更新：既不占用服务器，也不需要域名。安装后的应用读取
+`https://github.com/Alickx/mygo-fundbar/releases/latest/download/update-darwin-universal.json`，版本更高时下载增量或完整归档，用编译进应用的公钥校验 Ed25519 签名，替换应用后重启。这一功能由 MyGo 的更新器提供，细节见其 [auto-updates](https://github.com/egoist/mygo/blob/main/docs/updates.md) 与 [updater 插件](https://github.com/egoist/mygo/blob/main/docs/plugins/updater.md) 文档。
+
+更新签名密钥对只需生成一次：
+
+```sh
+go tool mygo keygen        # 私钥与公钥写到 ~/Library/Application Support/mygo/update-keys/
+```
+
+- **公钥**：写入 `mygo.json` 的 `updates.publicKey`，随代码提交。
+- **私钥**：绝不提交，至少两处备份（本机与离机各一份）。macOS 自带的钥匙串就能当保险箱，不必装额外软件：
+
+```sh
+KEY=~/Library/Application\ Support/mygo/update-keys/mygo-update.key
+security add-generic-password -a fundbar -s "FundBar update signing key" -w "$(cat "$KEY")" -U
+
+# 设置 CI 的 Secret，不必把私钥写到文件或终端历史里
+security find-generic-password -a fundbar -s "FundBar update signing key" -w \
+  | gh secret set MYGO_UPDATER_PRIVATE_KEY
+```
+
+取回（换机、重新生成 CI 凭据时）：
+
+```sh
+security find-generic-password -a fundbar -s "FundBar update signing key" -w
+```
+
+另一份建议抄在纸上、放在证件一类物品里，或存进 U 盘等离线介质；只依赖 GitHub Secret 不够，因为 Secret 无法读回。
+
+私钥丢失意味着已安装的应用再也收不到更新；私钥泄露意味着他人可以向所有用户推送任意代码，应立即改用新密钥对重新发布。清单里只有一把公钥，`mygo build` 也不会用与 `publicKey` 不匹配的私钥签名，因此无法在用户不停机的情况下换钥：换钥意味着旧版本用户收不到后续更新，需要手动下载一次。
+
+发布新版本的步骤：
+
+1. 递增 `mygo.json` 的 `version`，并同步 `internal/app/settings.go` 里的 `previewVersion`（截图预览用）。
+2. 在 [`CHANGELOG.md`](../CHANGELOG.md) 顶部新增 `## <version>` 小节，内容即更新窗口展示给用户的说明；缺少该小节时构建会失败。
+3. 提交后打标签 `v<version>` 并推送，CI 构建、签名并发布带更新文件的 Release。
+
+标签号与 `mygo.json` 的 `version` 必须一致：清单里的下载地址按 `v<version>` 生成。只带 updater 的版本才能自动更新，因此首个附带更新器的版本（0.4.0）是自动更新的起点，此前的版本需手动下载安装一次。
