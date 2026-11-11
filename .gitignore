@@ -1,4 +1,5 @@
 /build/
 /.mygo/
+.DS_Store
 mygo_windows_*.syso
 /mygo-update.key

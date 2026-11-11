@@ -19,16 +19,12 @@
   <a href="https://github.com/Alickx/mygo-fundbar/issues">反馈问题</a>
 </p>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/promo/hero-dark.png">
-  <img src="docs/promo/hero-light.png" width="1600" alt="FundBar：基金动态，抬眼可见。当前主界面展示自选分组、持仓收益、净值走势与行业配置，右侧菜单栏小窗可随时速览基金涨跌。">
-</picture>
+<img src="docs/promo/hero-dark.png" width="1600" alt="FundBar：基金动态，抬眼可见。当前主界面展示自选分组、持仓收益、净值走势与行业配置，右侧菜单栏小窗可随时速览基金涨跌。">
 
 <p align="center">
   <sub>当前界面渲染与代码排版，使用示例持仓及缓存行情；盘中估值不等于实际净值。</sub><br>
-  <a href="docs/promo/main-light.png">浅色界面原图</a> ·
   <a href="docs/promo/main-dark.png">深色界面原图</a> ·
-  <a href="docs/promo/README.md">宣传图生成方式</a>
+  <a href="docs/promo/main-light.png">浅色界面原图</a>
 </p>
 
 工作时看一眼菜单栏，就能了解持仓收益或自选平均涨跌。点击展开小窗，再点一只基金，即可查看走势、持仓与行业配置。

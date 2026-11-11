@@ -85,14 +85,6 @@ FUNDBAR_DIR=/tmp/fundbar-preview FUNDBAR_W=900 FUNDBAR_H=600 \
 
 `FUNDBAR_DIR` 指定截图工具读取的数据目录；`FUNDBAR_W`、`FUNDBAR_H` 设置主窗口截图尺寸。设置窗口截图使用固定尺寸。
 
-### 更新 README 宣传图
-
-```sh
-go run ./tools/promo
-```
-
-直接用当前源码渲染浅色 / 深色主界面与菜单栏小窗，并以 2 倍分辨率合成海报，输出到 `docs/promo/`。全程本地执行；读取行情缓存，使用独立的示例持仓配置。修改 UI 后运行此命令即可同步宣传图。输入缓存、参数、截图口径与产物说明见 [宣传图生成指南](promo/README.md)。
-
 ### 生成图标
 
 ```sh
@@ -114,7 +106,6 @@ resources/           应用图标与菜单栏图标
 tools/
   probe/             估值对比工具
   shot/              离屏截图工具
-  promo/             当前界面截图与 README 宣传图生成器
   genicon/           图标生成工具
 mygo.json            应用元数据与打包配置
 ```
@@ -169,24 +160,7 @@ go tool mygo keygen        # 私钥与公钥写到 ~/Library/Application Support
 ```
 
 - **公钥**：写入 `mygo.json` 的 `updates.publicKey`，随代码提交。
-- **私钥**：绝不提交，至少两处备份（本机与离机各一份）。macOS 自带的钥匙串就能当保险箱，不必装额外软件：
-
-```sh
-KEY=~/Library/Application\ Support/mygo/update-keys/mygo-update.key
-security add-generic-password -a fundbar -s "FundBar update signing key" -w "$(cat "$KEY")" -U
-
-# 设置 CI 的 Secret，不必把私钥写到文件或终端历史里
-security find-generic-password -a fundbar -s "FundBar update signing key" -w \
-  | gh secret set MYGO_UPDATER_PRIVATE_KEY
-```
-
-取回（换机、重新生成 CI 凭据时）：
-
-```sh
-security find-generic-password -a fundbar -s "FundBar update signing key" -w
-```
-
-另一份建议抄在纸上、放在证件一类物品里，或存进 U 盘等离线介质；只依赖 GitHub Secret 不够，因为 Secret 无法读回。
+- **私钥**：绝不提交；本机与离机各留一份备份，并设为仓库 Secret `MYGO_UPDATER_PRIVATE_KEY`（`gh secret set`）。只依赖 GitHub Secret 不够，因为 Secret 无法读回。
 
 私钥丢失意味着已安装的应用再也收不到更新；私钥泄露意味着他人可以向所有用户推送任意代码，应立即改用新密钥对重新发布。清单里只有一把公钥，`mygo build` 也不会用与 `publicKey` 不匹配的私钥签名，因此无法在用户不停机的情况下换钥：换钥意味着旧版本用户收不到后续更新，需要手动下载一次。
 
