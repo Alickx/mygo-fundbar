@@ -200,6 +200,9 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, vibrant bool) {
 				ui.Spinner(c).Size(11, 11)
 			}
 			note := a.updatedText()
+			if a.flashNow() != "" {
+				note = a.flashNow()
+			}
 			if a.failure != "" {
 				note = a.failure
 			}
@@ -588,6 +591,10 @@ func (a *App) main(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).FillHeight().Background(t.Background).Children(func() {
 		a.summaryBar(c, t)
 		ui.Divider(c)
+		if a.upd.step != updateNone {
+			a.updateStrip(c, t)
+			ui.Divider(c)
+		}
 		f := a.Selected()
 		if f == nil {
 			title, note := "在左侧添加一只基金", "搜索代码或名称，就能看到实时估值与今日收益"
@@ -678,6 +685,59 @@ func (a *App) summaryBar(c *ui.Context, t *ui.Theme) {
 				a.refresh()
 			}
 		})
+	})
+}
+
+// updateStrip shows the newer version: what it is, how far its download
+// got, and what the user can do about it.
+func (a *App) updateStrip(c *ui.Context, t *ui.Theme) {
+	u := a.upd
+	ui.Column(c).Padding(10, 24, 10, 24).Gap(8).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Textf(c, "新版本 %s", u.version).FontSize(12.5).FontWeight(600).
+				NoWrap().Shrink(0)
+			ui.Text(c, u.status()).FontSize(11.5).TextColor(t.TextMuted).
+				SingleLine().Ellipsis("…").Grow(1).Basis(0).Tooltip(u.status())
+			if u.notes != "" {
+				label := "更新说明"
+				if u.notesShown {
+					label = "收起说明"
+				}
+				if ui.Button(c, label).Shrink(0).Clicked() {
+					a.ToggleUpdateNotes()
+				}
+			}
+			switch u.step {
+			case updateFound:
+				if ui.Button(c, "忽略").Shrink(0).
+					Tooltip("这个版本不再提醒，下个版本照常提示").
+					Clicked() {
+					a.IgnoreUpdate()
+				}
+				if ui.PrimaryButton(c, "下载更新").Shrink(0).
+					Tooltip("下载并校验签名，重启后生效").
+					Clicked() {
+					a.DownloadUpdate()
+				}
+			case updateReady:
+				if ui.PrimaryButton(c, "安装并重启").Shrink(0).
+					Tooltip("重启应用，用上刚下载的版本").
+					Clicked() {
+					a.RestartUpdate()
+				}
+			}
+		})
+		if u.step == updateFetching {
+			ui.Progress(c, u.progress)
+		}
+		if u.notesShown && u.notes != "" {
+			ui.Column(c).Padding(10, 12).Radius(10).Background(t.Surface).
+				Border(1, t.Border).Children(func() {
+				ui.Scroll(c).Height(72).Children(func() {
+					ui.Text(c, u.notes).FontSize(11.5).TextColor(t.TextMuted)
+				})
+			})
+		}
 	})
 }
 

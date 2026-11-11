@@ -147,7 +147,11 @@ Apple 公证需要单独配置。使用 `xcrun notarytool store-credentials` 保
 ## 自动更新
 
 应用从 GitHub Release 更新：既不占用服务器，也不需要域名。安装后的应用读取
-`https://github.com/Alickx/mygo-fundbar/releases/latest/download/update-darwin-universal.json`，版本更高时下载增量或完整归档，用编译进应用的公钥校验 Ed25519 签名，替换应用后重启。这一功能由 MyGo 的更新器提供，细节见其 [auto-updates](https://github.com/egoist/mygo/blob/main/docs/updates.md) 与 [updater 插件](https://github.com/egoist/mygo/blob/main/docs/plugins/updater.md) 文档。
+`https://github.com/Alickx/mygo-fundbar/releases/latest/download/update-darwin-universal.json`，版本更高时下载增量或完整归档，用编译进应用的公钥校验 Ed25519 签名，重启后即为新版本。这一功能由 MyGo 的更新器提供，细节见其 [auto-updates](https://github.com/egoist/mygo/blob/main/docs/updates.md) 文档。
+
+界面在应用自己的窗口里，不弹单独窗口：`internal/app/update.go` 负责检查、下载与状态机，`updateStrip`（`internal/app/view.go`）画在摘要栏下方，状态依次为「发现有新版本 → 下载更新（带进度条）→ 安装并重启」，另有「忽略」（记在 `funds.json` 的 `skippedVersion`，下一个版本照常提示）与「更新说明」（展开 CHANGELOG 原文）。应用菜单与菜单栏右键菜单的「检查更新…」走同一条路径，结果写在窗口底部状态行几秒。
+
+因此本应用**不使用** `plugins/updater` 或 `plugins/updater/native`：那两个插件自带一个独立更新窗口。改界面时可查看 `go run ./tools/shot /tmp/u.png light update`（`FUNDBAR_STEP=fetching|ready`、`FUNDBAR_NOTES`、`FUNDBAR_NOTES_OPEN=1`）。
 
 更新签名密钥对只需生成一次：
 

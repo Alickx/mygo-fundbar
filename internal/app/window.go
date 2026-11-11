@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/updater"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -15,13 +14,6 @@ func (a *App) Attach(win *mygo.Window, tray *mygo.Tray) {
 	a.win = win
 	a.tray = tray
 	a.updateTray()
-	// A check in the background names the new version in the settings
-	// window, which the event redraws.
-	updater.OnChange(func() {
-		if a.settings != nil {
-			a.settings.Invalidate()
-		}
-	})
 }
 
 // showPanel makes the preview beside the menu bar icon and opens it. A
@@ -232,7 +224,7 @@ func (a *App) TrayMenu() *mygo.Menu {
 		&mygo.MenuItem{Label: "设置…",
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.OpenSettings() }},
 		&mygo.MenuItem{Label: "检查更新…",
-			Click: func(*mygo.MenuItem, *mygo.Window) { updater.CheckForUpdates() }},
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.CheckUpdate() }},
 		mygo.Separator(),
 		&mygo.MenuItem{Label: "退出", Role: mygo.RoleQuit},
 	)

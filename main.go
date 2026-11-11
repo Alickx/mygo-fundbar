@@ -9,8 +9,6 @@ import (
 	"log"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/updater"
-	"github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 
 	"fundbar/internal/app"
@@ -20,11 +18,6 @@ import (
 var trayIcon []byte
 
 func main() {
-	// The app updates itself from the signed releases on GitHub: the
-	// window checks for a newer version in the background and installs it.
-	// Native UI keeps the window free of a webview.
-	mygo.Use(native.Plugin)
-
 	mygo.App.SetName("FundBar")
 	mygo.App.WhenReady(func() {
 		dir, err := mygo.App.Path(mygo.PathUserData)
@@ -38,7 +31,9 @@ func main() {
 		mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 			{Label: "FundBar", Submenu: []*mygo.MenuItem{
 				{Label: "关于 FundBar", Role: mygo.RoleAbout},
-				updater.MenuItem(),
+				{Label: "检查更新…", Click: func(*mygo.MenuItem, *mygo.Window) {
+					a.CheckUpdate()
+				}},
 				mygo.Separator(),
 				{Label: "设置…", Accelerator: "Cmd+,",
 					Click: func(*mygo.MenuItem, *mygo.Window) { a.OpenSettings() }},

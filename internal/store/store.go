@@ -55,6 +55,9 @@ type Data struct {
 	NavView int `json:"navView,omitempty"`
 	// SidebarWidth is how wide the user made the list of funds.
 	SidebarWidth float32 `json:"sidebarWidth,omitempty"`
+	// SkippedVersion is the newer version the user ignored: the app offers
+	// the one after it.
+	SkippedVersion string `json:"skippedVersion,omitempty"`
 }
 
 // Load reads the file, and an empty state when there is none.

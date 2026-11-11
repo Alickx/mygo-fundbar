@@ -243,6 +243,20 @@ type App struct {
 	status  string
 	failure string
 
+	// upd is the newer version the app found and what it does with it, which
+	// the strip under the summary shows; up downloads it. They change on the
+	// main thread only.
+	upd      updateState
+	up       *mygo.Update
+	watching bool
+	// flash is a line the status row shows for a while, such as the answer
+	// to a check the user asked for, and flashUntil when it goes.
+	flash      string
+	flashUntil time.Time
+	// skippedVersion is the newer version the user ignored: the app offers
+	// the one after it.
+	skippedVersion string
+
 	// want is a fund the menu bar item chose, which the next frame shows.
 	want string
 	// pendingRemove and pendingLeave are a fund the context menu takes out,
@@ -281,6 +295,7 @@ func (a *App) Start() {
 	a.Load()
 	a.refresh()
 	go a.loop()
+	a.watchUpdates()
 }
 
 // Load reads the funds the user follows and the cache of what was read
@@ -318,6 +333,7 @@ func (a *App) Load() {
 	a.period = data.Period
 	a.navView = data.NavView
 	a.sidebarWidth = data.SidebarWidth
+	a.skippedVersion = data.SkippedVersion
 	if a.sidebarWidth == 0 {
 		a.sidebarWidth = 348
 	}
@@ -358,6 +374,7 @@ func (a *App) save() {
 	data := &store.Data{
 		Period: a.period, NavView: a.navView, SidebarWidth: a.sidebarWidth,
 		Groups: a.groups, ActiveGroup: a.group, Selected: a.selCode[""],
+		SkippedVersion: a.skippedVersion,
 	}
 	for _, f := range a.all {
 		data.Funds = append(data.Funds, store.Entry{

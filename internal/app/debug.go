@@ -42,3 +42,18 @@ func (a *App) PreviewGroupEdit() {
 
 // PreviewLogin sets the login item a preview shows.
 func (a *App) PreviewLogin(on bool) { a.previewLogin = on }
+
+// PreviewUpdate shows the strip of a newer version, as a check found one.
+func (a *App) PreviewUpdate(version, notes, step string, notesShown bool) {
+	s := updateFound
+	switch step {
+	case "fetching":
+		s = updateFetching
+	case "ready":
+		s = updateReady
+	}
+	a.upd = updateState{step: s, version: version, notes: notes, notesShown: notesShown}
+	if s == updateFetching {
+		a.upd.progress = 0.42
+	}
+}

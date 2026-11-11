@@ -78,6 +78,9 @@ func main() {
 			a.PreviewGroup(os.Getenv("FUNDBAR_GROUP"))
 		case "groupnew":
 			a.PreviewGroupEdit()
+		case "update":
+			a.PreviewUpdate("0.4.1", os.Getenv("FUNDBAR_NOTES"),
+				os.Getenv("FUNDBAR_STEP"), os.Getenv("FUNDBAR_NOTES_OPEN") != "")
 		case "panel":
 			tester := ui.NewTesterWith(a.Panel, 320, 560,
 				ui.TesterOptions{Dark: dark})
