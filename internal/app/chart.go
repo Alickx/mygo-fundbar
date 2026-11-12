@@ -3,8 +3,10 @@ package app
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
+	"fundbar/internal/ledger"
 	"fundbar/internal/model"
 
 	"github.com/egoist/mygo/ui"
@@ -90,6 +92,69 @@ func parseDay(date string) time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+// buyMark is a purchase placed on the net asset value line: the day whose
+// value it stands on, and the rows made on it. Buys that fall on the same
+// value share one mark, so a busy week reads as one dot rather than a stack.
+type buyMark struct {
+	at     int // index in the window's navs
+	date   string
+	count  int
+	shares float64
+	amount float64
+}
+
+// buyMarks places the fund's purchases on the window's values. A purchase on
+// a day the fund did not publish takes the next value, as the ledger's form
+// does; one after the newest value sits on the last point, where the line
+// ends, until the fund publishes its day. Purchases before the window are
+// left out: the period does not show them.
+func buyMarks(navs []model.Nav, txns []ledger.Txn) []buyMark {
+	if len(navs) == 0 {
+		return nil
+	}
+	var marks []buyMark
+	at := map[int]int{} // nav index → index in marks
+	for _, t := range txns {
+		if t.Kind != ledger.Buy || t.Date == "" || t.Date < navs[0].Date {
+			continue
+		}
+		i := len(navs) - 1
+		for j, nav := range navs {
+			if nav.Date >= t.Date {
+				i = j
+				break
+			}
+		}
+		amount := t.Shares*t.Price + t.Fee
+		if k, ok := at[i]; ok {
+			mark := &marks[k]
+			mark.count++
+			mark.shares += t.Shares
+			mark.amount += amount
+			if t.Date > mark.date {
+				mark.date = t.Date
+			}
+			continue
+		}
+		at[i] = len(marks)
+		marks = append(marks, buyMark{
+			at: i, date: t.Date, count: 1, shares: t.Shares, amount: amount,
+		})
+	}
+	sort.Slice(marks, func(i, j int) bool { return marks[i].at < marks[j].at })
+	return marks
+}
+
+// buyTip tells the story of a mark: what was bought, for how much, and when.
+func buyTip(m buyMark) string {
+	shares := sharesText(m.shares, 4)
+	if m.count == 1 {
+		return m.date + " 买入 " + shares + " 份 · " + money(m.amount) + " 元"
+	}
+	return fmt.Sprintf("%d 笔买入（最近 %s）· 共 %s 份 · %s 元",
+		m.count, m.date, shares, money(m.amount))
 }
 
 // chartCard shows the fund's net asset value over a period the user picks,
@@ -247,7 +312,7 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 		if comparing {
 			a.comparePlot(c, t, lines, navs, axisFrom)
 		} else {
-			a.plot(c, t, navs, axisFrom, up(t, change))
+			a.plot(c, t, f, navs, axisFrom, up(t, change))
 		}
 		a.riskRow(c, t, navs)
 	})
@@ -733,11 +798,12 @@ func (a *App) navTable(c *ui.Context, t *ui.Theme, navs []model.Nav) {
 }
 
 // plot draws the line of a fund's net asset value, and reads out the day
-// under the pointer. The window opens at axisFrom when it lies before the
+// under the pointer. Purchases from the fund's ledger are marked on the line
+// where they were made. The window opens at axisFrom when it lies before the
 // first value, as it does for a fund younger than the period: the line
 // then takes only the tail of the plot, so a longer period looks
 // different rather than identical.
-func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, axisFrom time.Time, color ui.Color) {
+func (a *App) plot(c *ui.Context, t *ui.Theme, f *Fund, navs []model.Nav, axisFrom time.Time, color ui.Color) {
 	n := len(navs)
 	t0, t1 := parseDay(navs[0].Date), parseDay(navs[n-1].Date)
 	if !axisFrom.IsZero() && axisFrom.Before(t0) {
@@ -777,6 +843,11 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, axisFrom time.T
 		ui.Text(c, tick.Label).NoWrap().FontSize(10.5).TextColor(t.TextMuted).
 			FontFeatures("tnum")
 	}
+	marks := buyMarks(navs, f.Txns)
+	// A buy sits on the line as a dot, with its tag above it, in the color
+	// a rise uses. Tags that would collide with the one before keep their dot
+	// alone; the tooltip still tells the row's story.
+	buyColor := up(t, 1)
 
 	chart.Plot(c, chart.Axes{Left: ticks, Bottom: xt.Ticks(5), Label: label},
 		func(area ui.Element) {
@@ -793,6 +864,32 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, axisFrom time.T
 					}})
 				p.StrokePath(chart.Line(r, xs, ys, chart.CurveLinear), 2, color)
 			})
+			// The marks go above the line but under the pointer's own dot, so
+			// hovering a purchase still reads the day out.
+			lastTag := float32(-1)
+			for _, m := range marks {
+				tip := buyTip(m)
+				x, yy := xs[m.at], ys[m.at]
+				chart.Point(c, x, yy, 10, 10).Radius(5).
+					Background(buyColor).Border(2, t.Surface).Tooltip(tip)
+				if lastTag >= 0 && x-lastTag < 0.12 {
+					continue
+				}
+				lastTag = x
+				h := ui.Center
+				switch {
+				case x < 0.06:
+					h = ui.Start
+				case x > 0.94:
+					h = ui.End
+				}
+				chart.Anchor(c, x, yy, h, ui.End, func() {
+					ui.Text(c, "买入").FontSize(10.5).FontWeight(600).NoWrap().
+						TextColor(ui.RGB(255, 255, 255)).Padding(2.5, 8).
+						Radius(5).Background(buyColor).Margin(0, 0, 5, 0).
+						Tooltip(tip)
+				})
+			}
 			chart.Select(c, area, &a.pick, xs, func(i int) string {
 				nav := navs[i]
 				return fmt.Sprintf("%s 净值 %.4f %s", nav.Date, nav.Unit, pct(nav.Pct))

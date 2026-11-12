@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"fundbar/internal/ledger"
 	"fundbar/internal/model"
 )
 
@@ -169,6 +170,77 @@ func TestRiskRowFollowsTheWindow(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("最大回撤") || tt.HasText("年化波动") || tt.HasText("年化收益") {
 		t.Fatalf("short window metrics = %v", tt.Texts())
+	}
+}
+
+func TestBuyMarksSitOnTheLine(t *testing.T) {
+	navs := []model.Nav{
+		{Date: "2026-11-10", Unit: 1.00},
+		{Date: "2026-11-12", Unit: 0.95},
+		{Date: "2026-11-13", Unit: 0.98},
+	}
+	txns := []ledger.Txn{
+		// Before the window's first value: the period does not show it.
+		{ID: 1, Date: "2026-11-09", Kind: ledger.Buy, Shares: 100, Price: 1.0},
+		{ID: 2, Date: "2026-11-10", Kind: ledger.Buy, Shares: 100, Price: 1.0, Fee: 0.15},
+		// The same value's second purchase shares the first one's mark.
+		{ID: 3, Date: "2026-11-10", Kind: ledger.Buy, Shares: 200, Price: 1.0},
+		// No value that day: the next one carries it, as the form's price does.
+		{ID: 4, Date: "2026-11-11", Kind: ledger.Buy, Shares: 200, Price: 0.96},
+		{ID: 5, Date: "2026-11-10", Kind: ledger.Sell, Shares: 50, Price: 1.0},
+		{ID: 6, Date: "2026-11-12", Kind: ledger.Reinvest, Shares: 20},
+		// After the newest value: it waits on the line's end.
+		{ID: 7, Date: "2026-11-14", Kind: ledger.Buy, Shares: 300, Price: 0.99},
+		{ID: 8, Kind: ledger.Buy, Shares: 1, Price: 1},
+	}
+	marks := buyMarks(navs, txns)
+	want := []buyMark{
+		{at: 0, date: "2026-11-10", count: 2, shares: 300, amount: 300.15},
+		{at: 1, date: "2026-11-11", count: 1, shares: 200, amount: 192},
+		{at: 2, date: "2026-11-14", count: 1, shares: 300, amount: 297},
+	}
+	if len(marks) != len(want) {
+		t.Fatalf("marks = %+v, want %+v", marks, want)
+	}
+	for i := range want {
+		got := marks[i]
+		if got.at != want[i].at || got.date != want[i].date ||
+			got.count != want[i].count || got.shares != want[i].shares ||
+			abs(got.amount-want[i].amount) > 1e-9 {
+			t.Errorf("mark %d = %+v, want %+v", i, got, want[i])
+		}
+	}
+	if buyMarks(nil, txns) != nil {
+		t.Fatal("a window with no values has no marks")
+	}
+}
+
+func TestTrendChartMarksPurchases(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	f.Navs = nil
+	for i := 24; i >= 0; i-- {
+		f.Navs = append(f.Navs, model.Nav{
+			Date: now().AddDate(0, 0, -i).Format("2006-01-02"),
+			Unit: 1 + float64(i)*0.001,
+		})
+	}
+	buyDay := now().AddDate(0, 0, -10).Format("2006-01-02")
+	f.Txns = []ledger.Txn{{
+		ID: 1, Date: buyDay, Kind: ledger.Buy, Shares: 1000, Price: 1.008,
+	}}
+	a.sel, a.period, a.navView = 0, 0, 0
+	tt := ui.NewTester(a.View, 1080, 840)
+	tt.Frame()
+	if !tt.HasText("买入") {
+		t.Fatalf("the purchase is not marked on the trend: %v", tt.Texts())
+	}
+
+	// A sale alone leaves the line unmarked: the dot is about what was bought.
+	f.Txns[0].Kind = ledger.Sell
+	tt.Frame()
+	if tt.HasText("买入") {
+		t.Fatalf("a sale marked a purchase: %v", tt.Texts())
 	}
 }
 

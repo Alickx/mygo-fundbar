@@ -46,6 +46,9 @@ type txForm struct {
 	priceText  string
 	feeText    string
 	amountText string
+	// byAmount says a buy's first field is the money paid rather than the
+	// shares: the price turns one into the other.
+	byAmount bool
 	// priceAuto says the price still follows the date, and navNote is what
 	// the date's net asset value says.
 	priceAuto bool
@@ -213,6 +216,16 @@ func parseNumber(text string) (float64, bool) {
 	return v, true
 }
 
+// buySharesFromAmount turns the money a buy took, fee included, into the
+// shares the ledger keeps. The ledger rounds shares to four decimals, so the
+// preview and the saved row agree.
+func buySharesFromAmount(amount, fee, price float64) float64 {
+	if price <= 0 {
+		return 0
+	}
+	return math.Round((amount-fee)/price*1e4) / 1e4
+}
+
 // requiredNumber reads a field every row needs, with the message a blank
 // field gets and the one a value outside the range gets.
 func requiredNumber(text, blank, bad string, positive bool) (float64, string) {
@@ -264,11 +277,21 @@ func (a *App) txRow(f *Fund) (ledger.Txn, string) {
 	}
 	switch kind {
 	case ledger.Buy, ledger.Sell:
-		shares, msg := requiredNumber(a.tx.sharesText, "请输入份额", "份额应大于 0", true)
+		// A buy may be given as the money it took instead of the shares it
+		// bought: the amount includes the fee, as a fund platform's 买入金额
+		// does, so the fee comes out before the price divides it.
+		var shares, price, amount float64
+		byAmount := kind == ledger.Buy && a.tx.byAmount
+		var msg string
+		if byAmount {
+			amount, msg = requiredNumber(a.tx.amountText, "请输入买入金额", "买入金额应大于 0", true)
+		} else {
+			shares, msg = requiredNumber(a.tx.sharesText, "请输入份额", "份额应大于 0", true)
+		}
 		if msg != "" {
 			return ledger.Txn{}, msg
 		}
-		price, msg := requiredNumber(a.tx.priceText, "请输入成交净值", "净值应大于 0", true)
+		price, msg = requiredNumber(a.tx.priceText, "请输入成交净值", "净值应大于 0", true)
 		if msg != "" {
 			return ledger.Txn{}, msg
 		}
@@ -279,6 +302,12 @@ func (a *App) txRow(f *Fund) (ledger.Txn, string) {
 				return ledger.Txn{}, "手续费不能为负"
 			}
 			fee = v
+		}
+		if byAmount {
+			if fee >= amount {
+				return ledger.Txn{}, "手续费不能超过买入金额"
+			}
+			shares = buySharesFromAmount(amount, fee, price)
 		}
 		if kind == ledger.Sell && fee > shares*price {
 			return ledger.Txn{}, "手续费不能超过卖出金额"
@@ -658,16 +687,21 @@ func (a *App) txForm(c *ui.Context, t *ui.Theme, f *Fund) {
 				func() { a.tx.err = "" })
 		})
 	default:
-		switch txKinds[a.tx.kind].kind {
+		kind := txKinds[a.tx.kind].kind
+		switch kind {
 		case ledger.Buy, ledger.Sell:
 			// A sale suggests the shares held; a buy shares nothing.
 			held := "0.0000"
-			if txKinds[a.tx.kind].kind == ledger.Sell && f.Shares > 0 {
+			if kind == ledger.Sell && f.Shares > 0 {
 				held = sharesText(f.Shares, 4)
 			}
 			ui.Row(c).Gap(18).AlignItems(ui.End).Children(func() {
-				a.txField(c, t, "份额", &a.tx.sharesText, held, "份额输入", "shares",
-					func() { a.tx.err = "" })
+				if kind == ledger.Buy {
+					a.txBuyField(c, t)
+				} else {
+					a.txField(c, t, "份额", &a.tx.sharesText, held, "份额输入", "shares",
+						func() { a.tx.err = "" })
+				}
 				a.txField(c, t, "成交净值", &a.tx.priceText, "0.0000", "成交净值输入", "price",
 					func() {
 						a.tx.priceAuto = false
@@ -726,6 +760,66 @@ func (a *App) txField(c *ui.Context, t *ui.Theme, label string, text *string, pl
 	})
 }
 
+// txBuyField is a buy's first field: the shares bought or the money it took,
+// with the switch between them on the label's line. The price and the fee do
+// not change with the choice; the ledger keeps shares either way.
+func (a *App) txBuyField(c *ui.Context, t *ui.Theme) {
+	text, label, placeholder, accLabel, name :=
+		&a.tx.sharesText, "份额", "0.0000", "份额输入", "shares"
+	swap, tip := "按金额", "改用买入金额记录：金额含手续费，按成交净值自动折算份额"
+	if a.tx.byAmount {
+		text, label, placeholder, accLabel, name =
+			&a.tx.amountText, "买入金额", "0.00", "买入金额输入", "buy-amount"
+		swap, tip = "按份额", "改用份额记录：按成交净值自动折算买入金额"
+	}
+	ui.Column(c).Gap(5).Grow(1).Basis(0).MinWidth(0).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, label).FontSize(11.5).TextColor(t.TextMuted).NoWrap()
+			ui.Spacer(c)
+			b := ui.ButtonBase(c).Shrink(0).Padding(0, 2)
+			color := t.Accent
+			if b.Hovered() {
+				color = t.AccentHover
+			}
+			b.Children(func() {
+				ui.Text(c, swap).FontSize(11).TextColor(color).NoWrap()
+			}).Tooltip(tip)
+			if b.Clicked() {
+				a.toggleBuyInput()
+			}
+		})
+		key := fmt.Sprintf("tx-%d-%s", a.tx.session, name)
+		if ui.TextInput(c.Key(key), text).Placeholder(placeholder).Label(accLabel).
+			Changed() {
+			a.tx.err = ""
+		}
+	})
+}
+
+// toggleBuyInput trades the buy's first field between shares and money,
+// carrying the value shown over at the day's price.
+func (a *App) toggleBuyInput() {
+	a.tx.byAmount = !a.tx.byAmount
+	a.tx.err = ""
+	price, ok := parseNumber(a.tx.priceText)
+	if !ok || price <= 0 {
+		return
+	}
+	fee, feeOK := parseNumber(a.tx.feeText)
+	if !feeOK || fee < 0 {
+		fee = 0
+	}
+	if a.tx.byAmount {
+		if shares, ok := parseNumber(a.tx.sharesText); ok {
+			a.tx.amountText = trim(shares*price+fee, 2)
+		}
+		return
+	}
+	if amount, ok := parseNumber(a.tx.amountText); ok && amount > fee {
+		a.tx.sharesText = trim(buySharesFromAmount(amount, fee, price), 4)
+	}
+}
+
 // txStatus is the line under the draft's fields: the money it adds up to and
 // what the date's value says, or the problem that keeps it from being saved.
 func (a *App) txStatus(f *Fund) (string, bool) {
@@ -756,7 +850,13 @@ func (a *App) txStatus(f *Fund) (string, bool) {
 			line = sharesText(shares, 4) + " 份"
 		}
 	case ledger.Buy:
-		if sharesOK && priceOK && feeOK {
+		switch {
+		case a.tx.byAmount && amountOK && amount > 0 && feeOK && fee >= amount:
+			return "手续费不能超过买入金额", true
+		case a.tx.byAmount && amountOK && amount > 0 && priceOK && price > 0 && feeOK:
+			line = "份额 " + sharesText(buySharesFromAmount(amount, fee, price), 4) +
+				" 份 · 买入金额 " + money(amount) + " 元（含手续费 " + money(fee) + "）"
+		case !a.tx.byAmount && sharesOK && priceOK && feeOK:
 			line = "金额 " + money(shares*price+fee) + " 元（含手续费 " + money(fee) + "）"
 		}
 	case ledger.Sell:

@@ -111,6 +111,113 @@ func TestLedgerCardRecordsTheFirstTransaction(t *testing.T) {
 	}
 }
 
+func TestBuyByAmountFillsTheShares(t *testing.T) {
+	a := New(t.TempDir())
+	f := &Fund{Code: "161725"}
+	a.tx = txForm{
+		open: true, code: f.Code, kind: 0, date: now(),
+		priceText: "0.5859", amountText: "587.66", feeText: "1.76", byAmount: true,
+	}
+	row, msg := a.txRow(f)
+	if msg != "" {
+		t.Fatalf("a filled amount was refused: %s", msg)
+	}
+	if row.Shares != 1000 || row.Price != 0.5859 || row.Fee != 1.76 ||
+		row.Kind != ledger.Buy {
+		t.Fatalf("row = %+v, want 1,000 shares at 0.5859", row)
+	}
+	// The preview under the fields says what the amount will be turned into
+	// before the row is saved.
+	status, bad := a.txStatus(f)
+	if bad || !strings.Contains(status, "份额 1,000 份") ||
+		!strings.Contains(status, "587.66") {
+		t.Fatalf("status = %q, %v", status, bad)
+	}
+
+	// The fee comes out of the amount: it cannot take all of it.
+	a.tx.feeText = "600"
+	if _, msg := a.txRow(f); !strings.Contains(msg, "手续费不能超过买入金额") {
+		t.Fatalf("a fee beyond the amount was allowed: %q", msg)
+	}
+	a.tx.feeText = ""
+	a.tx.amountText = ""
+	if _, msg := a.txRow(f); !strings.Contains(msg, "请输入买入金额") {
+		t.Fatalf("a blank amount was allowed: %q", msg)
+	}
+}
+
+func TestBuyFieldSwitchesBetweenSharesAndAmount(t *testing.T) {
+	a := New(t.TempDir())
+	a.tx = txForm{open: true, kind: 0, priceText: "0.5000",
+		sharesText: "2000", feeText: "1.00"}
+	a.toggleBuyInput()
+	if !a.tx.byAmount || a.tx.amountText != "1001" {
+		t.Fatalf("byAmount = %v, amount = %q; want the shares' money",
+			a.tx.byAmount, a.tx.amountText)
+	}
+	a.toggleBuyInput()
+	if a.tx.byAmount || a.tx.sharesText != "2000" {
+		t.Fatalf("byAmount = %v, shares = %q; want the money's shares",
+			a.tx.byAmount, a.tx.sharesText)
+	}
+}
+
+func TestLedgerCardRecordsABuyByAmount(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	a.editing = true
+	tt := cardTester(a, f, 760, 600)
+	if err := tt.Click("记一笔交易"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Advance(400 * time.Millisecond)
+	tt.Frame()
+	a.tx.date = parseDay(f.Navs[len(f.Navs)-1].Date)
+	a.prefillNav(f)
+	tt.Frame()
+
+	if err := tt.Click("按金额"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.tx.byAmount {
+		t.Fatalf("the buy did not switch to an amount: %+v", a.tx)
+	}
+	if err := tt.Click("买入金额输入"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("587.66")
+	tt.Frame()
+	if err := tt.Click("手续费输入"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("1.76")
+	tt.Frame()
+	if !tt.HasText("份额 1,000 份") {
+		t.Fatalf("the amount's shares are not previewed: %v", tt.Texts())
+	}
+	if err := tt.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+
+	var buy ledger.Txn
+	for _, txn := range f.Txns {
+		if txn.Kind == ledger.Buy {
+			buy = txn
+		}
+	}
+	if buy.Shares != 1000 || buy.Price != 0.5859 || buy.Fee != 1.76 {
+		t.Fatalf("saved buy = %+v, want 1,000 shares at 0.5859", buy)
+	}
+	if f.Shares != 13000 {
+		t.Fatalf("shares = %v, want the opening and the buy", f.Shares)
+	}
+}
+
 func TestLedgerCardRefusesAnOversell(t *testing.T) {
 	a := preview(t)
 	f := a.funds[0]
