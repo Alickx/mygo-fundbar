@@ -315,9 +315,6 @@ func (a *App) panelRow(c *ui.Context, t *ui.Theme, f *Fund) {
 			if f.Err != "" {
 				sub += " · 读取失败"
 			}
-			if f.UsingEstimate() && f.Est.Cover < minCover {
-				sub += fmt.Sprintf(" · 覆盖 %.1f%%", f.Est.Cover)
-			}
 			ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).
 				SingleLine().Ellipsis("…")
 		})
