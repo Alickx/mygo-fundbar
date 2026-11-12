@@ -25,6 +25,7 @@ func main() {
 			log.Fatal(err)
 		}
 		a := app.New(dir)
+		mygo.Theme.SetSource(app.StartupTheme(dir))
 
 		// A menu bar app: no Dock icon.
 		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)

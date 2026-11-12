@@ -2,7 +2,7 @@
   "name": "FundBar",
   "slug": "fundbar",
   "identifier": "app.fundbar.desktop",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
   "copyright": "© 2026 FundBar contributors",
   "publisher": "FundBar contributors",

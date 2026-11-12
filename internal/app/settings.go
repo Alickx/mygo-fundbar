@@ -7,6 +7,60 @@ import (
 	"fundbar/internal/store"
 )
 
+// themeIndex is the appearance control's entry for a saved mode: light,
+// dark, and the system's last.
+func themeIndex(mode string) int {
+	switch parseTheme(mode) {
+	case "light":
+		return 0
+	case "dark":
+		return 1
+	}
+	return 2
+}
+
+// themeName is the mode an entry of the appearance control chooses.
+func themeName(index int) string {
+	switch index {
+	case 0:
+		return "light"
+	case 1:
+		return "dark"
+	}
+	return ""
+}
+
+// parseTheme keeps a saved appearance, and reads anything else as following
+// the system.
+func parseTheme(mode string) string {
+	switch mode {
+	case "light", "dark":
+		return mode
+	}
+	return ""
+}
+
+// themeSource is what mygo needs to switch the app's appearance.
+func themeSource(mode string) mygo.ThemeSource {
+	switch parseTheme(mode) {
+	case "light":
+		return mygo.ThemeLight
+	case "dark":
+		return mygo.ThemeDark
+	}
+	return mygo.ThemeSystem
+}
+
+// setTheme applies and saves the appearance the user chose: "light",
+// "dark", or "" to follow the system.
+func (a *App) setTheme(mode string) {
+	a.themeMode = parseTheme(mode)
+	if mygo.App.IsReady() {
+		mygo.Theme.SetSource(themeSource(a.themeMode))
+	}
+	a.save()
+}
+
 // OpenSettings shows the settings window, making it the first time.
 func (a *App) OpenSettings() {
 	if a.settings != nil {
@@ -57,6 +111,18 @@ func (a *App) settingsView(c *ui.Context) {
 					ui.Text(c, "通用").FontSize(11.5).FontWeight(600).TextColor(t.TextMuted)
 					box := card(c, t)
 					box.Gap(10).Children(func() {
+						ui.Row(c).AlignItems(ui.Center).Gap(14).Children(func() {
+							ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(3).Children(func() {
+								ui.Text(c, "外观").FontSize(13)
+								ui.Text(c, "固定使用浅色或深色，自动则跟随系统外观").
+									FontSize(11.5).TextColor(t.TextMuted)
+							})
+							mode := themeIndex(a.themeMode)
+							if ui.Segmented(c, &mode, "浅色", "深色", "自动").Shrink(0).
+								Label("外观").Changed() {
+								a.setTheme(themeName(mode))
+							}
+						})
 						ui.Row(c).AlignItems(ui.Center).Gap(14).Children(func() {
 							ui.Column(c).Grow(1).Basis(0).Gap(3).Children(func() {
 								ui.Text(c, "登录时自动启动").FontSize(13)

@@ -169,6 +169,86 @@ func MaxDrawdown(navs []Nav) (pct float64, peak, low string) {
 	return -pct * 100, peak, low
 }
 
+// Recovery says how a window fell from a high and how much of that fall it
+// has made up: the deepest drawdown of the back-adjusted series, where it
+// ran, and how far the last value sits below the window's highest.
+type Recovery struct {
+	// Drawdown is the deepest fall from a running high, as a positive
+	// percent. A window that only rose has none.
+	Drawdown float64
+	// Peak and Low are the dates of the high the deepest fall started at,
+	// and of the lowest value it reached. A window that never fell has both
+	// at its highest value.
+	Peak, Low string
+	// High is the highest back-adjusted value so far, at HighDate.
+	High     float64
+	HighDate string
+	// Fall is how far the last value sits below High, as a positive
+	// percent: 0 at a new high.
+	Fall float64
+	// Progress compares the last value's Fall with the deepest Drawdown,
+	// from 0 to 100: 100 when the window stands at its high, and 0 when it
+	// is as far below its high as the deepest fall was.
+	Progress float64
+	// Recovered is the date the value first got back to Peak after Low, and
+	// Days how many values it took. Both are nothing while the window has
+	// not got back.
+	Recovered string
+	Days      int
+	// PeakAt, LowAt and HighAt are the indexes of Peak, Low and High in the
+	// slice the recovery was worked out from.
+	PeakAt, LowAt, HighAt int
+}
+
+// RecoveryOf works out a window's deepest drawdown and how much of it the
+// last value has recovered, on the back-adjusted series, as MaxDrawdown
+// does. The window's highest is the highest value so far, so that a window
+// that climbed back and fell again shows only its current fall.
+func RecoveryOf(navs []Nav) Recovery {
+	adj := Adjusted(navs)
+	if len(adj) == 0 {
+		return Recovery{}
+	}
+	r := Recovery{Progress: 100}
+	top, peakAt := adj[0], 0
+	highAt := 0
+	maxFall, lowAt, fallPeakAt := 0.0, 0, 0
+	for i, v := range adj {
+		if v > adj[highAt] {
+			highAt = i
+		}
+		if v > top {
+			top, peakAt = v, i
+		}
+		if fall := (top - v) / top; fall > maxFall {
+			maxFall, lowAt, fallPeakAt = fall, i, peakAt
+		}
+	}
+	peakAt = fallPeakAt
+	if maxFall == 0 {
+		// A window that only rose fell from nowhere: its high is the peak it
+		// never left.
+		peakAt, lowAt = highAt, highAt
+	}
+	r.Drawdown = maxFall * 100
+	r.Peak, r.Low = navs[peakAt].Date, navs[lowAt].Date
+	r.High, r.HighDate = adj[highAt], navs[highAt].Date
+	r.Fall = (adj[highAt] - adj[len(adj)-1]) / adj[highAt] * 100
+	if maxFall > 0 {
+		r.Progress = max(0, min(100, (1-(r.Fall/100)/maxFall)*100))
+	}
+	if lowAt > peakAt {
+		for i := lowAt + 1; i < len(adj); i++ {
+			if adj[i] >= adj[peakAt] {
+				r.Recovered, r.Days = navs[i].Date, i-lowAt
+				break
+			}
+		}
+	}
+	r.PeakAt, r.LowAt, r.HighAt = peakAt, lowAt, highAt
+	return r
+}
+
 // AnnualizedVolatility is the sample standard deviation of the window's
 // daily true returns, times √250, in percent, with the number of returns it
 // was computed from. A window of fewer than two values has neither.

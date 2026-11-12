@@ -180,3 +180,37 @@ func requireBox(t *testing.T, tt *ui.Tester, text string) ui.Rect {
 	}
 	return r
 }
+
+func TestRecoveryViewShowsTheFallAndItsProgress(t *testing.T) {
+	a := preview(t)
+	// A rise to 1.20, a fall to 0.90 and a climb back to 1.02: a 25% fall of
+	// which 40% is made up.
+	day := func(n int) string { return now().AddDate(0, 0, -n).Format("2006-01-02") }
+	a.funds[0].Navs = []model.Nav{
+		{Date: day(30), Unit: 1.00},
+		{Date: day(20), Unit: 1.20, Pct: 20},
+		{Date: day(10), Unit: 0.90, Pct: -25},
+		{Date: day(0), Unit: 1.02, Pct: 13.33},
+	}
+	a.sel = 0
+	tt := ui.NewTester(a.View, 1080, 840)
+	tt.Frame()
+	if err := tt.Click("修复"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.navView != 2 {
+		t.Fatalf("navView = %d, want 2", a.navView)
+	}
+	for _, text := range []string{
+		"净值修复", "最大回撤", "修复进度", "距区间高点", "回撤修复天数",
+		"25.00%", "40.00%", "回撤修复中", "净值新高",
+	} {
+		if !tt.HasText(text) {
+			t.Errorf("recovery view does not show %q: %v", text, tt.Texts())
+		}
+	}
+	if !tt.HasText("最大回撤 25.00%") {
+		t.Errorf("the deepest fall is not marked on the plot: %v", tt.Texts())
+	}
+}

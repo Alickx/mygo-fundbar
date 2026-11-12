@@ -93,12 +93,13 @@ func parseDay(date string) time.Time {
 }
 
 // chartCard shows the fund's net asset value over a period the user picks,
-// as a line or as the value of each day.
+// as a line, as the value of each day, or as how it is recovering from its
+// deepest fall.
 func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	if a.period < 0 || a.period >= len(periods) {
 		a.period = 0
 	}
-	if a.navView < 0 || a.navView > 1 {
+	if a.navView < 0 || a.navView > 2 {
 		a.navView = 0
 	}
 	navs := windowOf(f, a.period)
@@ -138,18 +139,25 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 		lines = compareSeries(parseDay(navs[0].Date),
 			parseDay(navs[len(navs)-1].Date), funds)
 	}
+	// The recovery view reads the whole window, and says how far the last
+	// value still is from its high.
+	recovery := model.RecoveryOf(navs)
 
 	card(c, t).Gap(8).Children(func() {
 		// The readout has its own line: selecting a date never pushes the
 		// period controls out of the card or changes the plot's position.
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			title := "净值走势"
-			if a.navView == 1 {
+			switch a.navView {
+			case 1:
 				title = "历史净值"
+			case 2:
+				title = "净值修复"
 			}
 			ui.Text(c, title).FontSize(13).FontWeight(600).NoWrap().Shrink(0)
 			ui.Spacer(c)
-			ui.Segmented(c, &a.navView, "走势", "列表").Shrink(0).
+			ui.Segmented(c, &a.navView, "走势", "列表", "修复").Shrink(0).
+				Tooltip("净值走势、历史净值与净值修复").
 				OnChange(func() {
 					a.pick = -1
 					a.save()
@@ -165,6 +173,10 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 				// the same window, in its line's color.
 				a.compareLegend(c, t, lines)
 				a.compareButton(c, t)
+				return
+			}
+			if a.navView == 2 {
+				a.recoveryInfo(c, t, navs, recovery, label, partial, distribution)
 				return
 			}
 			info := label + "净值变化 " + pct(change)
@@ -227,6 +239,11 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			})
 			return
 		}
+		if a.navView == 2 {
+			a.recoveryPlot(c, t, navs, recovery, axisFrom)
+			a.recoveryRow(c, t, recovery)
+			return
+		}
 		if comparing {
 			a.comparePlot(c, t, lines, navs, axisFrom)
 		} else {
@@ -284,6 +301,330 @@ func (a *App) riskRow(c *ui.Context, t *ui.Theme, navs []model.Nav) {
 			})
 		}
 	})
+}
+
+// recoveryInfo is the chart's readout in the recovery view: the day under
+// the pointer, or how far the window still sits below its high.
+func (a *App) recoveryInfo(c *ui.Context, t *ui.Theme, navs []model.Nav, rec model.Recovery, label string, partial, distribution bool) {
+	info, color := "", t.Text
+	tip := ""
+	switch {
+	case a.pick >= 0 && a.pick < len(navs):
+		n := navs[a.pick]
+		fall := drawdownAt(navs, a.pick)
+		info = fmt.Sprintf("%s · 净值 %.4f · 回撤 %.2f%%", n.Date, n.Unit, -fall)
+		color = up(t, fall)
+		tip = fmt.Sprintf("这一天比此前的高点低 %.2f%%", -fall)
+	case len(navs) == 1:
+		info = "只有 " + navs[0].Date + " 一个净值日"
+		color = t.TextMuted
+		tip = info
+	case rec.Drawdown == 0:
+		info = label + " · 区间内没有回撤"
+		color = t.TextMuted
+		tip = "区间内的净值没有跌破过此前的高点"
+	case rec.Fall == 0:
+		info = label + " · 净值处于区间最高点"
+		color = up(t, 1)
+		tip = fmt.Sprintf("区间最高点 %s 的净值 %.4f，当前净值就在这一点", rec.HighDate, rec.High)
+	default:
+		info = label + " · 距区间最高点回撤约 " + fmt.Sprintf("%.2f%%", rec.Fall)
+		color = up(t, -1)
+		tip = fmt.Sprintf("区间最高点 %s 的净值 %.4f，当前净值低 %.2f%%；最深一次回撤 %.2f%%，已修复 %.2f%%",
+			rec.HighDate, rec.High, rec.Fall, rec.Drawdown, rec.Progress)
+	}
+	if distribution {
+		tip += "；区间内有分红或拆分，图中的净值按前复权绘制"
+	}
+	if len(navs) > 1 {
+		tip += "；橙线是创新高的上涨，绿线和绿带是回落的过程，红线和浅红带是从低点回升的修复过程"
+	}
+	if partial && len(navs) > 1 {
+		tip += fmt.Sprintf("；该基金净值自 %s 起，只有 %d 个交易日，图上显示的是全部历史",
+			navs[0].Date, len(navs))
+	}
+	ui.Text(c, info).FontSize(11.5).TextColor(color).FontFeatures("tnum").
+		SingleLine().Ellipsis("…").Grow(1).Basis(0).MinWidth(0).Tooltip(tip)
+}
+
+// drawdownAt is how far one day's value sits below the highest before it,
+// as a negative percent: 0 on a day that set a new high.
+func drawdownAt(navs []model.Nav, i int) float64 {
+	if i <= 0 || i >= len(navs) {
+		return 0
+	}
+	adj := model.Adjusted(navs[:i+1])
+	top := adj[0]
+	for _, v := range adj {
+		top = math.Max(top, v)
+	}
+	if top <= 0 {
+		return 0
+	}
+	return (adj[i]/top - 1) * 100
+}
+
+// recoveryRow is the recovery view's own measures: the deepest fall and how
+// much of it the current fall gives back, how far the window still is from
+// its high, and how long the deepest fall took to get back.
+func (a *App) recoveryRow(c *ui.Context, t *ui.Theme, rec model.Recovery) {
+	type stat struct {
+		label, value, tip string
+		color             ui.Color
+	}
+	high := "净值新高"
+	highTip := "当前净值就在区间最高点"
+	if rec.Fall > 0 {
+		high = "-" + fmt.Sprintf("%.2f%%", rec.Fall)
+		highTip = fmt.Sprintf("区间最高点 %s 的净值 %.4f，当前净值低 %.2f%%",
+			rec.HighDate, rec.High, rec.Fall)
+	}
+	days, daysTip := "—", "净值还没有回到最大回撤前的高点"
+	if rec.Days > 0 {
+		days = fmt.Sprintf("%d 个交易日", rec.Days)
+		daysTip = fmt.Sprintf("从低点 %s 回到 %s 的高点，用了 %d 个交易日",
+			rec.Low, rec.Recovered, rec.Days)
+	}
+	stats := []stat{
+		{label: "最大回撤", value: fmt.Sprintf("%.2f%%", rec.Drawdown), color: t.Text,
+			tip: fmt.Sprintf("从 %s 的高点回落到 %s 的低点，跌去 %.2f%%（按前复权净值计算）",
+				rec.Peak, rec.Low, rec.Drawdown)},
+		// The progress compares the current fall with the deepest one, as
+		// the fund apps do; the days below belong to the deepest fall alone.
+		{label: "修复进度", value: fmt.Sprintf("%.2f%%", rec.Progress), color: t.Text,
+			tip: fmt.Sprintf("（最大回撤 − 当前回撤）÷ 最大回撤 =（%.2f%% − %.2f%%）÷ %.2f%%",
+				rec.Drawdown, rec.Fall, rec.Drawdown)},
+		{label: "距区间高点", value: high, color: up(t, -rec.Fall), tip: highTip},
+		{label: "回撤修复天数", value: days, color: t.Text, tip: daysTip},
+	}
+	if rec.Drawdown == 0 {
+		stats[0].tip = "区间内的净值没有跌破过此前的高点"
+		stats[1].value, stats[1].tip = "—", "区间内没有回撤，也就没有要修复的部分"
+	}
+	ui.Row(c).Gap(18).Wrap().Children(func() {
+		for _, s := range stats {
+			ui.Column(c).Shrink(0).Gap(1).Children(func() {
+				ui.Text(c, s.label).FontSize(10.5).TextColor(t.TextMuted).NoWrap()
+				ui.Text(c, s.value).FontSize(12.5).FontWeight(600).
+					TextColor(s.color).FontFeatures("tnum").NoWrap().Tooltip(s.tip)
+			})
+		}
+	})
+}
+
+// recoveryPlot draws the window as its change from the first day, colored by
+// what the line does: a climb to a new high in orange, a fall in green, and
+// a climb back in red. A pale band behind the current fall marks the fall
+// from the last high to its low, and the climb back since, in two tints;
+// tags name the high, the deepest fall and the current state. The tags keep
+// to the plot's padding, clear of the line.
+func (a *App) recoveryPlot(c *ui.Context, t *ui.Theme, navs []model.Nav, rec model.Recovery, axisFrom time.Time) {
+	n := len(navs)
+	t0, t1 := parseDay(navs[0].Date), parseDay(navs[n-1].Date)
+	if !axisFrom.IsZero() && axisFrom.Before(t0) {
+		t0 = axisFrom
+	}
+	span := t1.Sub(t0)
+	if span <= 0 {
+		return
+	}
+
+	adj := model.Adjusted(navs)
+	xs := make([]float32, n)
+	ys := make([]float32, n)
+	pcts := make([]float64, n)
+	dds := make([]float64, n)
+	highs := make([]int, 0, n)
+	lo, hi := 0.0, 0.0
+	top := math.Inf(-1)
+	for i := range navs {
+		pcts[i] = (adj[i]/adj[0] - 1) * 100
+		lo = math.Min(lo, pcts[i])
+		hi = math.Max(hi, pcts[i])
+		xs[i] = float32(float64(parseDay(navs[i].Date).Sub(t0)) / float64(span))
+		if adj[i] > top {
+			top = adj[i]
+			highs = append(highs, i)
+		}
+		dds[i] = (adj[i]/top - 1) * 100
+	}
+	if hi-lo < 0.01 {
+		hi += 0.1
+		lo -= 0.1
+	}
+	// The padding leaves room for the tags above and below the line.
+	pad := (hi - lo) * 0.22
+	y := chart.NewLinear(lo-pad, hi+pad).Nice(4)
+	ticks := y.Ticks(4)
+	for i := range navs {
+		ys[i] = y.At(pcts[i])
+	}
+	xt := chart.NewTime(t0, t1)
+	xt.Format = timeAxisFormat(t0, t1)
+	label := func(side chart.Side, tick chart.Tick) {
+		text := tick.Label
+		if side == chart.Left || side == chart.Right {
+			text = axisPercent(tick.Value)
+		}
+		ui.Text(c, text).NoWrap().FontSize(10.5).TextColor(t.TextMuted).
+			FontFeatures("tnum")
+	}
+
+	// The three parts of the line, as the reference chart draws them: the
+	// rise in orange, the fall in green, and the climb back in red.
+	rise, fall, back := ui.Hex("#f4834a"), ui.Hex("#5fbd6d"), ui.Hex("#eb545b")
+	if t.Dark {
+		rise, fall, back = ui.Hex("#ff9b5e"), ui.Hex("#6fd07e"), ui.Hex("#ff6b6b")
+	}
+	// tag writes a label in a solid color with white text, as the reference
+	// does. The plot keeps its padding for them, so a tag never hides the
+	// line it names.
+	tag := func(text string, bg ui.Color) ui.Element {
+		return ui.Text(c, text).FontSize(10.5).FontWeight(600).NoWrap().
+			TextColor(ui.RGB(255, 255, 255)).Padding(2.5, 8).
+			Radius(5).Background(bg)
+	}
+
+	// The current fall runs from the last high to its lowest value and back;
+	// its two parts get bands of their own, the fall in one tint and the climb
+	// back in another.
+	episodeLow := rec.HighAt
+	if rec.Fall > 0 && rec.HighAt >= 0 && rec.HighAt < n {
+		for i := rec.HighAt + 1; i < n; i++ {
+			if adj[i] <= adj[episodeLow] {
+				episodeLow = i
+			}
+		}
+	}
+
+	chart.Plot(c, chart.Axes{Left: ticks, Bottom: xt.Ticks(5), Label: label},
+		func(area ui.Element) {
+			area.Draw(func(p *ui.Painter, r ui.Rect) {
+				for _, tick := range ticks {
+					yy := chart.Y(r, tick.At)
+					p.Line(r.X, yy, r.X+r.W, yy, 1, t.Border)
+				}
+				zero := chart.Y(r, y.At(0))
+				p.Line(r.X, zero, r.X+r.W, zero, 1, t.TextMuted.Alpha(0.40))
+				// The current fall keeps a pale band from the last high to its
+				// lowest value, and the climb back since a band of its own, so
+				// the two parts read apart.
+				if rec.Fall > 0 && rec.HighAt >= 0 && rec.HighAt < n {
+					x0 := chart.X(r, xs[rec.HighAt])
+					xLow := chart.X(r, xs[episodeLow])
+					fallBand, backBand := fall.Alpha(0.05), back.Alpha(0.06)
+					if t.Dark {
+						fallBand, backBand = fall.Alpha(0.07), back.Alpha(0.10)
+					}
+					p.Fill(ui.Rect{X: x0, Y: r.Y, W: xLow - x0, H: r.H}, fallBand, 0)
+					p.Fill(ui.Rect{X: xLow, Y: r.Y, W: r.X + r.W - xLow, H: r.H}, backBand, 0)
+				}
+				line := func(from, to int, c ui.Color) {
+					if from < 0 || to >= n || to <= from {
+						return
+					}
+					p.StrokePath(chart.Line(r, xs[from:to+1], ys[from:to+1],
+						chart.CurveLinear), 2, c)
+				}
+				dot := func(i int, c ui.Color, size float32) {
+					x, yy := chart.X(r, xs[i]), chart.Y(r, ys[i])
+					p.Fill(ui.Rect{X: x - size/2, Y: yy - size/2, W: size, H: size},
+						c, size/2)
+				}
+				// The climb to the high is orange, the fall from it green, and
+				// the climb back since red.
+				line(0, rec.HighAt, rise)
+				if episodeLow > rec.HighAt {
+					line(rec.HighAt, episodeLow, fall)
+				}
+				if rec.Fall > 0 {
+					line(episodeLow, n-1, back)
+				}
+				// A hairline drops from the deepest low to the tag under the
+				// plot, as the reference chart's leader does.
+				if rec.Drawdown > 0 && rec.LowAt >= 0 && rec.LowAt < n {
+					x := chart.X(r, xs[rec.LowAt])
+					p.Line(x, chart.Y(r, ys[rec.LowAt]), x, r.Y+r.H, 1, fall.Alpha(0.55))
+				}
+				// A dot marks each value that set a new high, with the highest
+				// one in the color the fall starts in; the deepest low and the
+				// latest value keep a dot of their own.
+				for _, i := range highs {
+					if i >= rec.HighAt {
+						break
+					}
+					dot(i, rise, 4.5)
+				}
+				if rec.Drawdown > 0 {
+					dot(rec.HighAt, fall, 6.5)
+					dot(rec.LowAt, fall, 6.5)
+				}
+				switch {
+				case rec.Fall == 0:
+					dot(n-1, rise, 6.5)
+				case episodeLow < n-1:
+					dot(n-1, back, 6.5)
+				case rec.Drawdown > 0:
+					dot(n-1, fall, 6.5)
+				default:
+					dot(n-1, rise, 6.5)
+				}
+			})
+			chart.Select(c, area, &a.pick, xs, func(i int) string {
+				nav := navs[i]
+				return fmt.Sprintf("%s 净值 %.4f 回撤 %.2f%%", nav.Date, nav.Unit, -dds[i])
+			})
+			if a.pick >= 0 && a.pick < n {
+				pick := rise
+				if rec.Fall > 0 {
+					switch {
+					case a.pick > episodeLow:
+						pick = back
+					case a.pick > rec.HighAt:
+						pick = fall
+					}
+				}
+				chart.RuleX(c, xs[a.pick], 1).Background(t.TextMuted.Alpha(0.45))
+				chart.Point(c, xs[a.pick], ys[a.pick], 9, 9).
+					Radius(4.5).Background(pick)
+			}
+
+			// The deepest fall keeps its number under the plot at its low, the
+			// highest high is named over the plot, and the current state sits
+			// at the top right: all in the padding, clear of the line.
+			if rec.Drawdown > 0 && rec.LowAt >= 0 && rec.LowAt < n {
+				h := ui.Center
+				switch {
+				case xs[rec.LowAt] < 0.10:
+					h = ui.Start
+				case xs[rec.LowAt] > 0.90:
+					h = ui.End
+				}
+				chart.Anchor(c, xs[rec.LowAt], 0, h, ui.End, func() {
+					tag(fmt.Sprintf("最大回撤 %.2f%%", rec.Drawdown), fall).
+						Margin(0, 0, 3, 0)
+				})
+			}
+			if rec.Fall > 0 && rec.HighAt >= 0 && rec.HighAt < n && xs[rec.HighAt] < 0.62 {
+				h := ui.Center
+				switch {
+				case xs[rec.HighAt] < 0.08:
+					h = ui.Start
+				case xs[rec.HighAt] > 0.54:
+					h = ui.End
+				}
+				chart.Anchor(c, xs[rec.HighAt], 1, h, ui.Start, func() {
+					tag("净值新高", rise).Margin(3, 0, 0, 0)
+				})
+			}
+			status, statusColor := "净值新高", rise
+			if rec.Fall > 0 {
+				status, statusColor = "回撤修复中", back
+			}
+			chart.Anchor(c, 1, 1, ui.End, ui.Start, func() {
+				tag(status, statusColor).Margin(3, 0, 0, 0)
+			})
+		}).Height(164).Gap(6).Label("净值修复")
 }
 
 // periodControl chooses the chart's window. Seven entries do not fit across

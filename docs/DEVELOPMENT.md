@@ -82,12 +82,13 @@ go run ./tools/shot /tmp/fundbar-ledger-add.png light ledger-add 007760
 go run ./tools/shot /tmp/fundbar-ledger-edit.png light ledger-edit 007760
 go run ./tools/shot /tmp/fundbar-ledger-error.png light ledger-error 007760
 FUNDBAR_PERIOD=6 go run ./tools/shot /tmp/fundbar-risk.png light risk 007760
+FUNDBAR_PERIOD=3 go run ./tools/shot /tmp/fundbar-recovery.png light recovery 007760
 FUNDBAR_PERIOD=3 FUNDBAR_COMPARE=021528,159992,028678 \
   go run ./tools/shot /tmp/fundbar-compare.png light compare 007760
 FUNDBAR_SHARE_MONEY=1 go run ./tools/shot /tmp/fundbar-share.png light share
 ```
 
-参数顺序为：输出路径、主题（`light` / `dark`）、场景（`normal` / `settings` / `edit` / `search` / `batch` / `empty` / `group` / `groupnew` / `panel` / `portfolio` / `ledger` / `ledger-add` / `ledger-edit` / `ledger-error` / `risk` / `compare` / `share`）、选中的基金代码。`batch` 场景用 `FUNDBAR_BATCH` 指定搜索框里的代码串，展示批量添加行；设置窗口截图可用 `FUNDBAR_SCROLL` 指定滚动距离（如 `600`），把「数据」一节带进画面。`risk` 场景用 `FUNDBAR_PERIOD` 选择走势图的周期，序号依次为 0–6（近1月、近3月、近6月、近1年、今年来、近3年、成立以来），用来核对风险指标行与长周期的年份刻度。`compare` 场景同样用 `FUNDBAR_PERIOD` 选周期，用 `FUNDBAR_COMPARE` 给出最多三只基金的代码，核对对比曲线与图例。`share` 场景不画窗口，而是直接写出分享图；`FUNDBAR_SHARE_MONEY=1` 展示含金额的版本。`group` 场景用 `FUNDBAR_GROUP` 指定要展示的分组名称。`ledger` 系列场景用第四个参数指定基金代码，并在内存中准备示例（或该基金已有的）交易记录，不会写入数据目录；`ledger-add` 和 `ledger-edit` 打开新增或编辑表单，`ledger-error` 展示交易记录有误时的提示行。`panel` 场景按系统毛玻璃渲染小窗，再铺一层灰色渐变作底，用来核对小窗在材质上的对比度。
+参数顺序为：输出路径、主题（`light` / `dark`）、场景（`normal` / `settings` / `edit` / `search` / `batch` / `empty` / `group` / `groupnew` / `panel` / `portfolio` / `ledger` / `ledger-add` / `ledger-edit` / `ledger-error` / `risk` / `recovery` / `compare` / `share`）、选中的基金代码。`batch` 场景用 `FUNDBAR_BATCH` 指定搜索框里的代码串，展示批量添加行；设置窗口截图可用 `FUNDBAR_SCROLL` 指定滚动距离（如 `600`），把「数据」一节带进画面。`risk` 场景用 `FUNDBAR_PERIOD` 选择走势图的周期，序号依次为 0–6（近1月、近3月、近6月、近1年、今年来、近3年、成立以来），用来核对风险指标行与长周期的年份刻度。`recovery` 场景同样用 `FUNDBAR_PERIOD` 选周期，展示净值修复视图：回撤曲线、修复指标与图上的标注。`compare` 场景同样用 `FUNDBAR_PERIOD` 选周期，用 `FUNDBAR_COMPARE` 给出最多三只基金的代码，核对对比曲线与图例。`share` 场景不画窗口，而是直接写出分享图；`FUNDBAR_SHARE_MONEY=1` 展示含金额的版本。`group` 场景用 `FUNDBAR_GROUP` 指定要展示的分组名称。`ledger` 系列场景用第四个参数指定基金代码，并在内存中准备示例（或该基金已有的）交易记录，不会写入数据目录；`ledger-add` 和 `ledger-edit` 打开新增或编辑表单，`ledger-error` 展示交易记录有误时的提示行。`panel` 场景按系统毛玻璃渲染小窗，再铺一层灰色渐变作底，用来核对小窗在材质上的对比度。
 
 ```sh
 FUNDBAR_DIR=/tmp/fundbar-preview FUNDBAR_W=900 FUNDBAR_H=600 \

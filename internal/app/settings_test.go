@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"fundbar/internal/model"
@@ -218,6 +219,7 @@ func TestSettingsShowsTheNewGeneralRows(t *testing.T) {
 	tt := ui.NewTester(a.PreviewSettings, 480, 760)
 	tt.Frame()
 	for _, text := range []string{
+		"外观", "浅色", "深色", "自动",
 		"菜单栏显示", "收益金额", "涨跌幅", "仅图标",
 		"全局快捷键", "在任何应用中按 ⌃⌥F 打开或收起小窗",
 		"小窗显示大盘指数",
@@ -267,6 +269,7 @@ func TestSettingsDefaultAndRoundTrip(t *testing.T) {
 	a.trayText = trayPct
 	a.globalShortcut = true
 	a.showIndices = false
+	a.setTheme("dark")
 	a.save()
 
 	b := New(dir)
@@ -280,6 +283,9 @@ func TestSettingsDefaultAndRoundTrip(t *testing.T) {
 	if b.showIndices {
 		t.Fatal("the saved hidden benchmarks were lost")
 	}
+	if b.themeMode != "dark" {
+		t.Fatalf("saved appearance = %q, want dark", b.themeMode)
+	}
 
 	// The file keeps the three settings under names an older build ignores.
 	body, err := os.ReadFile(path)
@@ -292,5 +298,49 @@ func TestSettingsDefaultAndRoundTrip(t *testing.T) {
 	}
 	if fields["trayText"] != trayPct || fields["globalShortcut"] != true || fields["hideIndices"] != true {
 		t.Fatalf("saved settings = %v", fields)
+	}
+	if fields["theme"] != "dark" {
+		t.Fatalf("saved appearance = %v, want dark", fields["theme"])
+	}
+}
+
+func TestThemeControlShowsAndSwitches(t *testing.T) {
+	a := preview(t)
+	tt := ui.NewTester(a.PreviewSettings, 480, 760)
+	tt.Frame()
+	for _, text := range []string{"外观", "浅色", "深色", "自动"} {
+		if !tt.HasText(text) {
+			t.Fatalf("missing %q in %v", text, tt.Texts())
+		}
+	}
+	if err := tt.Click("深色"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.themeMode != "dark" {
+		t.Fatalf("appearance after choosing dark = %q", a.themeMode)
+	}
+	if data := store.Load(filepath.Join(a.dir, "funds.json")); data.Theme != "dark" {
+		t.Fatalf("saved appearance = %q, want dark", data.Theme)
+	}
+	if err := tt.Click("自动"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.themeMode != "" {
+		t.Fatalf("appearance after choosing automatic = %q, want the system's", a.themeMode)
+	}
+}
+
+func TestStartupThemeReadsTheSavedAppearance(t *testing.T) {
+	dir := t.TempDir()
+	if err := (&store.Data{Theme: "light"}).Save(filepath.Join(dir, "funds.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got := StartupTheme(dir); got != mygo.ThemeLight {
+		t.Fatalf("startup appearance = %q, want light", got)
+	}
+	if got := StartupTheme(t.TempDir()); got != mygo.ThemeSystem {
+		t.Fatalf("startup appearance without a file = %q, want the system's", got)
 	}
 }

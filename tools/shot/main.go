@@ -155,6 +155,15 @@ func main() {
 				fmt.Sscan(v, &period)
 			}
 			a.PreviewPeriod(period)
+		case "recovery":
+			// The chart card's recovery view, over 近1年 unless
+			// FUNDBAR_PERIOD names another index.
+			period := 3
+			if v := os.Getenv("FUNDBAR_PERIOD"); v != "" {
+				fmt.Sscan(v, &period)
+			}
+			a.PreviewPeriod(period)
+			a.PreviewNavView(2)
 		case "ledger", "ledger-add", "ledger-edit", "ledger-error":
 			if len(os.Args) > 4 {
 				a.PreviewLedger(os.Args[4], os.Args[3])

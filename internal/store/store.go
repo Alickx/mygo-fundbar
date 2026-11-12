@@ -65,8 +65,8 @@ type Data struct {
 	// holding group's stays in Selected.
 	GroupSelected map[string]string `json:"groupSelected,omitempty"`
 	Period        int               `json:"period,omitempty"`
-	// NavView is the history the chart card shows: 0 for the line, 1 for the
-	// list of each day's value.
+	// NavView is what the chart card shows: 0 for the line, 1 for the list
+	// of each day's value, 2 for the recovery from the deepest fall.
 	NavView int `json:"navView,omitempty"`
 	// SidebarWidth is how wide the user made the list of funds.
 	SidebarWidth float32 `json:"sidebarWidth,omitempty"`
@@ -91,6 +91,10 @@ type Data struct {
 	// whose disclosed holdings are too small is not estimated, and an older
 	// file keeps that.
 	LowCoverEstimate bool `json:"lowCoverEstimate,omitempty"`
+	// Theme is the appearance the user chose: "light", "dark", or "" to
+	// follow the system. An older file names none, and follows the system as
+	// it always did.
+	Theme string `json:"theme,omitempty"`
 }
 
 // AlertState is what the alert rules have already announced, kept beside the

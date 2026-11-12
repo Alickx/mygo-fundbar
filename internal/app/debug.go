@@ -50,6 +50,15 @@ func (a *App) PreviewPeriod(period int) {
 	}
 }
 
+// PreviewNavView shows the chart card's view: the line, the list of values,
+// or the recovery, as the segmented control does.
+func (a *App) PreviewNavView(view int) {
+	if view >= 0 && view <= 2 {
+		a.navView = view
+		a.pick = -1
+	}
+}
+
 // PreviewCompare draws funds beside the chosen one, as the compare menu
 // does. The comparison is session state, so a preview never writes it.
 func (a *App) PreviewCompare(codes ...string) {

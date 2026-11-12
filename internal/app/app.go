@@ -290,8 +290,8 @@ type App struct {
 	// session state: the chart's comparison is not saved, and choosing a
 	// fund or removing one takes it out here.
 	compare []string
-	// navView is the history the chart card shows: the line, or a list of
-	// each day's value.
+	// navView is what the chart card shows: the line, a list of each day's
+	// value, or the window's recovery from its deepest fall.
 	navView int
 	query   string
 	// portfolio shows the holding group's look-through in place of a fund's
@@ -362,6 +362,9 @@ type App struct {
 	// trayMoney, trayPct and trayIcon modes; a preview of an older file
 	// leaves it as the gain.
 	trayText string
+	// themeMode is the appearance the user chose: "light", "dark", or ""
+	// for the system's. An older file names none, and follows the system.
+	themeMode string
 	// globalShortcut is whether the panel's shortcut is on. The two fields
 	// below do the registering, so a test sees the calls without a running
 	// app, as notify does; the defaults do nothing until the app is ready.
@@ -439,12 +442,23 @@ var cst = calendar.CST
 
 func now() time.Time { return time.Now().In(cst) }
 
+// configName is the file that keeps the settings and the funds the user
+// follows, in the app's data directory.
+const configName = "funds.json"
+
+// StartupTheme is the appearance the saved setting asks for, read before the
+// app's windows exist so that it starts in it rather than switching to it
+// after the first frame.
+func StartupTheme(dir string) mygo.ThemeSource {
+	return themeSource(store.Load(filepath.Join(dir, configName)).Theme)
+}
+
 // New makes the app, whose files live in dir.
 func New(dir string) *App {
 	a := &App{
 		src:           source.New(),
 		dir:           dir,
-		config:        filepath.Join(dir, "funds.json"),
+		config:        filepath.Join(dir, configName),
 		pendingRemove: -1,
 		pendingLeave:  -1,
 		wantJoin:      -1,
@@ -599,12 +613,19 @@ func (a *App) Load() {
 	if a.trayText == "" {
 		a.trayText = trayMoney
 	}
+	a.themeMode = parseTheme(data.Theme)
 	a.globalShortcut = data.GlobalShortcut
 	a.showIndices = !data.HideIndices
 	if a.sidebarWidth == 0 {
 		a.sidebarWidth = 348
 	}
 	a.rebuildList()
+	// An import can bring another appearance with it; the app switches once
+	// everything else is in place. A preview or a test has no app loop to
+	// switch, and draws the theme the system gives it.
+	if mygo.App.IsReady() {
+		mygo.Theme.SetSource(themeSource(a.themeMode))
+	}
 }
 
 func (a *App) fill(f *Fund, snap *store.Snapshot) {
@@ -672,6 +693,7 @@ func (a *App) save() {
 		SkippedVersion: a.skippedVersion,
 		TrayText:       trayText, GlobalShortcut: a.globalShortcut,
 		HideIndices: !a.showIndices, LowCoverEstimate: a.lowCoverEstimate,
+		Theme: a.themeMode,
 	}
 	if a.alerts != (store.Alerts{}) {
 		// The file names the rules once the user has set one, and not before,

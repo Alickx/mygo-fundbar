@@ -281,3 +281,81 @@ func TestAdjusted(t *testing.T) {
 		t.Fatal("expected the distribution to be found")
 	}
 }
+
+func TestRecoveryFromTheDeepestFall(t *testing.T) {
+	// A rise to 1.20, a fall to 0.90 and a climb back to 1.02: the deepest
+	// fall is 25%, of which 40% is made up by the last value.
+	navs := []Nav{
+		{Date: "2026-01-02", Unit: 1.00, Pct: 0},
+		{Date: "2026-01-09", Unit: 1.10, Pct: 10},
+		{Date: "2026-01-16", Unit: 1.20, Pct: 9.09},
+		{Date: "2026-01-23", Unit: 0.90, Pct: -25},
+		{Date: "2026-01-30", Unit: 1.02, Pct: 13.33},
+	}
+	r := RecoveryOf(navs)
+	if !closeTo(r.Drawdown, 25) {
+		t.Fatalf("drawdown = %v, want 25", r.Drawdown)
+	}
+	if r.Peak != "2026-01-16" || r.Low != "2026-01-23" {
+		t.Fatalf("drawdown runs %s -> %s, want 2026-01-16 -> 2026-01-23", r.Peak, r.Low)
+	}
+	if !closeTo(r.Fall, 15) || !closeTo(r.Progress, 40) {
+		t.Fatalf("fall/progress = %v/%v, want 15/40", r.Fall, r.Progress)
+	}
+	if r.HighDate != "2026-01-16" {
+		t.Fatalf("high is %s, want 2026-01-16", r.HighDate)
+	}
+	// It never got back to the peak, so there is no recovery to time.
+	if r.Recovered != "" || r.Days != 0 {
+		t.Fatalf("recovered = %q after %d days, want no recovery", r.Recovered, r.Days)
+	}
+	if r.PeakAt != 2 || r.LowAt != 3 || r.HighAt != 2 {
+		t.Fatalf("indexes = %d/%d/%d, want 2/3/2", r.PeakAt, r.LowAt, r.HighAt)
+	}
+}
+
+func TestRecoveryCountsTheDaysBackToTheHigh(t *testing.T) {
+	navs := []Nav{
+		{Date: "2026-01-02", Unit: 1.00},
+		{Date: "2026-01-09", Unit: 1.20, Pct: 20},
+		{Date: "2026-01-16", Unit: 1.00, Pct: -16.67},
+		{Date: "2026-01-23", Unit: 1.10, Pct: 10},
+		{Date: "2026-01-30", Unit: 1.25, Pct: 13.64},
+		{Date: "2026-02-06", Unit: 1.15, Pct: -8},
+	}
+	r := RecoveryOf(navs)
+	// Back to the peak on the fourth value, two values after the low; the
+	// window then set a higher high and is 8% below it.
+	if r.Recovered != "2026-01-30" || r.Days != 2 {
+		t.Fatalf("recovered = %q after %d days, want 2026-01-30 after 2", r.Recovered, r.Days)
+	}
+	if r.HighDate != "2026-01-30" || !closeTo(r.Fall, 8) {
+		t.Fatalf("high/fall = %s/%v, want 2026-01-30/8", r.HighDate, r.Fall)
+	}
+	// The deepest fall is still 16.67%, and the current 8% fall is half of
+	// it, so half of that fall is made up.
+	if !closeTo(r.Progress, 52) {
+		t.Fatalf("progress = %v, want 52", r.Progress)
+	}
+}
+
+func TestRecoveryWithoutAFall(t *testing.T) {
+	navs := []Nav{
+		{Date: "2026-01-02", Unit: 1.00},
+		{Date: "2026-01-09", Unit: 1.05, Pct: 5},
+		{Date: "2026-01-16", Unit: 1.10, Pct: 4.76},
+	}
+	r := RecoveryOf(navs)
+	if r.Drawdown != 0 || r.Fall != 0 || r.Progress != 100 {
+		t.Fatalf("drawdown/fall/progress = %v/%v/%v, want 0/0/100", r.Drawdown, r.Fall, r.Progress)
+	}
+	if r.Peak != r.Low || r.Peak != "2026-01-16" {
+		t.Fatalf("peak/low = %s/%s, want both at 2026-01-16", r.Peak, r.Low)
+	}
+	if r.Recovered != "" || r.Days != 0 {
+		t.Fatalf("recovered = %q after %d days, want none", r.Recovered, r.Days)
+	}
+	if r := RecoveryOf(nil); r != (Recovery{}) {
+		t.Fatalf("recovery of nothing = %+v, want zero", r)
+	}
+}
