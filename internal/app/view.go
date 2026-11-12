@@ -158,6 +158,12 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, vibrant bool) {
 			if strings.TrimSpace(a.query) != "" {
 				ui.Scroll(c).Fill().Children(func() {
 					ui.Column(c).Gap(1).Padding(0, 4).Children(func() {
+						// Codes alone ask to be followed together, without a
+						// search for each one's name first.
+						if codes, ok := batchCodes(a.query); ok {
+							a.batchResults(c, t, codes)
+							return
+						}
 						a.searchResults(c, t)
 					})
 				})
@@ -178,7 +184,13 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, vibrant bool) {
 			}
 			a.list.Key = func(i int) any { return a.funds[i].Code }
 			a.list.Label = func(i int) string { return a.funds[i].Name }
+			// The look-through leaves every row unmarked: the list chooses a
+			// scratch row, so that a click on any row, even the fund it would
+			// otherwise show chosen, lands somewhere the next frame can read.
 			a.list.Selected = &a.sel
+			if a.portfolio {
+				a.list.Selected = &a.listSel
+			}
 			a.list.Reorder = a.reorder
 			// A chosen row is painted in the list's accent before the row
 			// builds. In the dark theme that accent under the row's rounded
@@ -500,7 +512,7 @@ func (a *App) searchResults(c *ui.Context, t *ui.Theme) {
 func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 	f := a.funds[row.Index]
 	c := row.Context
-	chosen := row.Index == a.sel
+	chosen := !a.portfolio && row.Index == a.sel
 
 	change := f.ChangePct()
 	tint := up(t, change)
@@ -529,7 +541,13 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 		Background(bg).Border(1, edge).FillWidth()
 	r.Transition(ui.ElementTransition{Duration: 140 * time.Millisecond})
 	r.ContextMenu(func(m *ui.Menu) {
-		if m.Item("移出自选").Chosen() {
+		// Removing a fund takes its transactions with it, which the menu
+		// says where the choice is made rather than after it.
+		remove := "移出自选"
+		if n := len(f.Txns); n > 0 {
+			remove = fmt.Sprintf("移出自选（连同 %d 笔交易记录）", n)
+		}
+		if m.Item(remove).Chosen() {
 			a.removeAt(row.Index)
 		}
 		// A fund of two groups leaves the one the window lists, and stays in
@@ -563,6 +581,10 @@ func (a *App) fundRow(row ui.ListRow, t *ui.Theme) {
 				if f.Err != "" {
 					ui.Text(c, "· 读取失败").FontSize(11).TextColor(t.Danger).NoWrap()
 				}
+				if f.UsingEstimate() && f.Est.Cover < minCover {
+					ui.Textf(c, "· 覆盖 %.1f%%", f.Est.Cover).FontSize(11).
+						TextColor(t.TextMuted).NoWrap()
+				}
 			})
 		})
 
@@ -594,6 +616,14 @@ func (a *App) main(c *ui.Context, t *ui.Theme) {
 		if a.upd.step != updateNone {
 			a.updateStrip(c, t)
 			ui.Divider(c)
+		}
+		if a.portfolio {
+			ui.Scroll(c).Grow(1).Children(func() {
+				ui.Column(c).Padding(18, 24, 24, 24).Gap(12).Children(func() {
+					a.portfolioView(c, t)
+				})
+			})
+			return
 		}
 		f := a.Selected()
 		if f == nil {
@@ -681,9 +711,30 @@ func (a *App) summaryBar(c *ui.Context, t *ui.Theme) {
 			note := a.freshNote()
 			ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).
 				FontFeatures("tnum").NoWrap().Tooltip(a.updatedText())
-			if ui.Button(c, "刷新").Shrink(0).Disabled(a.busy).Clicked() {
-				a.refresh()
-			}
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				// The look-through only exists where there is a portfolio to
+				// look through: the holding group's funds with shares.
+				if a.portfolioAvailable() {
+					label := "组合透视"
+					tip := "把各基金季报的持仓按市值加总，看看真正持有什么"
+					if a.portfolio {
+						label = "返回基金"
+						tip = "回到所选基金的详情"
+					}
+					if ui.Button(c, label).Shrink(0).Tooltip(tip).Clicked() {
+						a.togglePortfolio()
+					}
+				}
+				// The picture is of the holding group, whatever group the
+				// window lists: with none to draw, the choice is not offered,
+				// and the look-through carries a share button of its own.
+				if !a.portfolio && len(a.inGroup(holdingGroup)) > 0 {
+					a.shareButton(c)
+				}
+				if ui.Button(c, "刷新").Shrink(0).Disabled(a.busy).Clicked() {
+					a.refresh()
+				}
+			})
 		})
 	})
 }
@@ -827,7 +878,15 @@ func (a *App) detailTitle(c *ui.Context, t *ui.Theme, f *Fund) {
 			})
 		})
 		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-			pill(c, label, color, badgeBg)
+			badge := pill(c, label, color, badgeBg)
+			if !f.UsingEstimate() && f.Est.Cover > 0 && f.Est.Cover < minCover {
+				// The day has an estimate, but too little of the fund is in
+				// the disclosed holdings for it to be shown; say so rather
+				// than leave the published value unexplained.
+				badge.Tooltip(fmt.Sprintf(
+					"重仓股覆盖 %.1f%%，不足 20%%，未显示盘中估算；可在设置里打开「低覆盖也显示估值」",
+					f.Est.Cover))
+			}
 			if note := a.valueLine(f); note != "" {
 				ui.Text(c, note).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum")
 			}
@@ -840,14 +899,20 @@ func (a *App) detailTitle(c *ui.Context, t *ui.Theme, f *Fund) {
 func (a *App) valueLine(f *Fund) string {
 	last, ok := f.LastNav()
 	if f.UsingEstimate() {
-		at := ""
-		if !f.QuoteAt.IsZero() {
-			at = " · " + f.QuoteAt.In(cst).Format("15:04")
+		// An estimate shown over too few disclosed holdings says how much of
+		// the fund it stands on.
+		cover := ""
+		if f.Est.Cover < minCover {
+			cover = fmt.Sprintf(" · 重仓股覆盖 %.1f%%", f.Est.Cover)
 		}
 		if a.holds(f) {
-			return fmt.Sprintf("估算净值 %.4f", f.EstNav()) + at
+			at := ""
+			if !f.QuoteAt.IsZero() {
+				at = " · " + f.QuoteAt.In(cst).Format("15:04")
+			}
+			return fmt.Sprintf("估算净值 %.4f", f.EstNav()) + at + cover
 		}
-		return f.QuoteAt.In(cst).Format("01-02 15:04")
+		return f.QuoteAt.In(cst).Format("01-02 15:04") + cover
 	}
 	if !ok {
 		return ""
@@ -868,12 +933,14 @@ func (a *App) valueLine(f *Fund) string {
 // digits rolls the numbers of a text as they change, as a counter does.
 var digits = ui.ContentTransition{Numeric: true}
 
-// statCard is one measure of the fund.
+// statCard is one measure of the fund. tip is the longer story a click on it
+// tells, when the card has one.
 type statCard struct {
 	label string
 	value string
 	note  string
 	color ui.Color
+	tip   string
 }
 
 func (a *App) stats(c *ui.Context, t *ui.Theme, f *Fund) {
@@ -882,24 +949,24 @@ func (a *App) stats(c *ui.Context, t *ui.Theme, f *Fund) {
 	if a.holds(f) {
 		cards = []statCard{
 			{"今日收益", signedMoney(f.TodayProfit()), profitNote(f),
-				up(t, f.TodayProfit())},
+				up(t, f.TodayProfit()), ""},
 			{"累计收益", signedMoney(f.TotalProfit()), pct(f.TotalPct()),
-				up(t, f.TotalProfit())},
+				up(t, f.TotalProfit()), profitTip(f)},
 			{"持仓市值", money(f.Value()),
-				fmt.Sprintf("%s 份", trim(f.Shares, 4)), t.Text},
+				fmt.Sprintf("%s 份", sharesText(f.Shares, 4)), t.Text, ""},
 		}
 	} else {
 		// Without shares, the fund's own numbers are what the user came for.
 		if hasLast {
 			cards = append(cards, statCard{"单位净值",
-				fmt.Sprintf("%.4f", last.Unit), last.Date, up(t, last.Pct)})
+				fmt.Sprintf("%.4f", last.Unit), last.Date, up(t, last.Pct), ""})
 		}
 		if f.UsingEstimate() {
 			cards = append(cards, statCard{"估算净值",
-				fmt.Sprintf("%.4f", f.EstNav()), "盘中估算", up(t, f.Est.Pct)})
+				fmt.Sprintf("%.4f", f.EstNav()), "盘中估算", up(t, f.Est.Pct), ""})
 		} else if hasLast && last.Acc > 0 {
 			cards = append(cards, statCard{"累计净值",
-				fmt.Sprintf("%.4f", last.Acc), last.Date, t.Text})
+				fmt.Sprintf("%.4f", last.Acc), last.Date, t.Text, ""})
 		}
 	}
 	if len(cards) == 0 {
@@ -907,12 +974,20 @@ func (a *App) stats(c *ui.Context, t *ui.Theme, f *Fund) {
 	}
 	ui.Row(c).Gap(10).Wrap().Children(func() {
 		for _, card := range cards {
-			ui.Column(c).Grow(1).Basis(0).MinWidth(128).Gap(3).
+			col := ui.Column(c).Grow(1).Basis(0).MinWidth(128).Gap(3).
 				Padding(11, 13).Radius(12).Background(t.Surface).
-				Border(1, t.Border).Children(func() {
+				Border(1, t.Border)
+			if card.tip != "" {
+				col.Tooltip(card.tip)
+			}
+			col.Children(func() {
 				ui.Text(c, card.label).FontSize(11.5).TextColor(t.TextMuted)
+				valueTip := card.value
+				if card.tip != "" {
+					valueTip = card.tip
+				}
 				ui.Text(c, card.value).FontSize(17).FontWeight(600).
-					TextColor(card.color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(card.value).
+					TextColor(card.color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(valueTip).
 					ContentTransition(digits)
 				ui.Text(c, card.note).FontSize(11).TextColor(t.TextMuted).
 					FontFeatures("tnum").NoWrap()
@@ -946,6 +1021,18 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 				ui.Textf(c, "覆盖 %.1f%%", f.Est.Cover).FontSize(11.5).
 					TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
 					Tooltip("前十大重仓股合计占基金净值的比例，越高估值越准")
+			}
+			// The record says how far the estimate has been off lately, so a
+			// careful reader can weigh the number above it.
+			switch acc := summarizeEstimateAccuracy(a.estimates[f.Code]); {
+			case acc.Finished >= 3:
+				ui.Textf(c, "估值偏差 ±%.2f%%", acc.Mean).FontSize(11.5).
+					TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
+					Tooltip(acc.tip())
+			case acc.Finished > 0:
+				ui.Text(c, "估值偏差记录中").FontSize(11.5).
+					TextColor(t.TextMuted).NoWrap().
+					Tooltip("至少 3 个交易日的已公布净值之后，才会给出平均偏差")
 			}
 		})
 		body := card(c, t)
@@ -1078,78 +1165,93 @@ func stockProfileLine(p model.StockProfile) string {
 	return p.Industry
 }
 
-// holdingSection shows the shares the user holds, and their price: read
-// only until they ask to edit them.
+// holdingSection shows the shares the user holds, and their price: the two
+// numbers typed by hand, or the transactions that work both out.
 func (a *App) holdingSection(c *ui.Context, t *ui.Theme, f *Fund) {
-	holding := f.Shares > 0
 	if !a.editing {
 		// The fields fill in from the values as the edit opens.
 		f.editText = false
+	}
+	if a.tx.open && a.tx.code != f.Code {
+		// A draft belongs to the fund it was started for.
+		a.cancelTxn()
 	}
 	body := card(c, t)
 	body.Padding(8, 15).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 			ui.Text(c, "我的持仓").FontSize(12.5).FontWeight(600).NoWrap().Shrink(0)
-			note := "未录入"
-			switch {
-			case a.editing:
-				note = "修改自动保存"
-			case holding:
-				note = fmt.Sprintf("%s 份 · 成本 %.4f", trim(f.Shares, 4), f.Cost)
-			}
+			note := holdingNote(f, a.editing)
 			ui.Text(c, note).FontSize(11.5).TextColor(t.TextMuted).FontFeatures("tnum").
 				Grow(1).Basis(0).SingleLine().Ellipsis("…").Tooltip(note)
-			if a.editing {
+			switch {
+			case a.editing:
 				if ui.PrimaryButton(c, "完成").Shrink(0).Clicked() {
 					a.editing = false
+					a.cancelTxn()
 				}
-			} else if ui.Button(c, map[bool]string{true: "编辑持仓", false: "录入持仓"}[holding]).Shrink(0).
-				Clicked() {
-				a.editing = true
+			case f.ledgered():
+				if ui.Button(c, "交易记录").Shrink(0).Clicked() {
+					a.editing = true
+				}
+			default:
+				label := "录入持仓"
+				if f.Shares > 0 {
+					label = "编辑持仓"
+				}
+				if ui.Button(c, label).Shrink(0).Clicked() {
+					a.editing = true
+				}
 			}
 		})
+		a.holdingBody(c, t, f)
+	})
+	a.txToast(c)
+}
 
-		// The fields unfold, and fold away, rather than appearing and
-		// taking the room at once.
-		target := float32(0)
-		if a.editing {
-			target = holdingFormHeight
-		}
-		form := ui.Box(c).ClipY()
-		h := form.AnimateTo("holding-form", target, ui.Smooth)
-		form.Height(h)
-		if h > 1 {
-			form.Children(func() {
-				if !f.editText {
-					f.sharesText = trim(f.Shares, 4)
-					f.costText = trim(f.Cost, 4)
-					f.editText = true
-				}
-				ui.Row(c).Padding(12, 0, 0, 0).Gap(18).AlignItems(ui.End).Children(func() {
-					ui.Column(c).Gap(5).Grow(1).Basis(0).Children(func() {
-						ui.Text(c, "持有份额").FontSize(11.5).TextColor(t.TextMuted)
-						if ui.TextInput(c, &f.sharesText).Placeholder("0.00").
-							Label("持有份额输入").Changed() &&
-							readNumber(f.sharesText, &f.Shares, 0, 1e10) {
-							a.changed()
-						}
-					})
-					ui.Column(c).Gap(5).Grow(1).Basis(0).Children(func() {
-						ui.Text(c, "成本价").FontSize(11.5).TextColor(t.TextMuted)
-						if ui.TextInput(c, &f.costText).Placeholder("0.0000").
-							Label("成本价输入").Changed() &&
-							readNumber(f.costText, &f.Cost, 0, 1e6) {
-							a.changed()
-						}
-					})
-				})
-			})
-		}
+// targetFields are a held fund's price targets: the holding return at which
+// the app announces it. Empty leaves one side off.
+func (a *App) targetFields(c *ui.Context, t *ui.Theme, f *Fund) {
+	ui.Row(c).Gap(18).AlignItems(ui.End).Children(func() {
+		ui.Column(c).Gap(5).Grow(1).Basis(0).Children(func() {
+			ui.Text(c, "止盈线（%）").FontSize(11.5).TextColor(t.TextMuted)
+			if ui.TextInput(c, &f.takeText).Placeholder("不提醒").
+				Label("止盈输入").
+				Tooltip("持有收益率达到这个百分数时提醒，留空关闭").
+				Changed() && readOptional(f.takeText, &f.TakeProfit, 0.1, 1000) {
+				a.changed()
+			}
+		})
+		ui.Column(c).Gap(5).Grow(1).Basis(0).Children(func() {
+			ui.Text(c, "止损线（%）").FontSize(11.5).TextColor(t.TextMuted)
+			if ui.TextInput(c, &f.stopText).Placeholder("不提醒").
+				Label("止损输入").
+				Tooltip("持有收益率跌到这个百分数时提醒，留空关闭").
+				Changed() && readOptional(f.stopText, &f.StopLoss, 0.1, 1000) {
+				a.changed()
+			}
+		})
 	})
 }
 
-// holdingFormHeight is the room the fields take, which the section opens to.
-const holdingFormHeight = 74
+// targetLine names the price targets set on a fund, and "" when it has none.
+func targetLine(f *Fund) string {
+	var parts []string
+	if f.TakeProfit > 0 {
+		parts = append(parts, "止盈 +"+trim(f.TakeProfit, 2)+"%")
+	}
+	if f.StopLoss > 0 {
+		parts = append(parts, "止损 -"+trim(f.StopLoss, 2)+"%")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// targetText is a target as its field shows it: empty when the side is off.
+func targetText(v float64) string {
+	if v <= 0 {
+		return ""
+	}
+	return trim(v, 2)
+}
 
 // readNumber reads a field's text as a number between lo and hi into v, and
 // reports whether it did: text that is empty, not a number, or out of range
@@ -1162,6 +1264,16 @@ func readNumber(text string, v *float64, lo, hi float64) bool {
 	}
 	*v = n
 	return true
+}
+
+// readOptional reads a field's text as a number between lo and hi into v,
+// where an empty field turns the setting off.
+func readOptional(text string, v *float64, lo, hi float64) bool {
+	if strings.TrimSpace(text) == "" {
+		*v = 0
+		return true
+	}
+	return readNumber(text, v, lo, hi)
 }
 
 // trim writes a number with at most n decimals, and none that are zero.

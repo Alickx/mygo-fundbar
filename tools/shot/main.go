@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 
@@ -54,10 +55,39 @@ func main() {
 				{Code: "012414", Name: "招商中证白酒指数(LOF)C", Type: "指数型-股票"},
 				{Code: "0124142", Name: "鹏华酒指数A", Type: "指数型-股票"},
 			})
+		case "batch":
+			query := os.Getenv("FUNDBAR_BATCH")
+			if query == "" {
+				query = "007760, 161725"
+			}
+			a.PreviewBatch(query)
 		case "settings":
-			tester := ui.NewTesterWith(a.PreviewSettings, 480, 430,
+			if os.Getenv("FUNDBAR_ALERTS") != "" {
+				a.PreviewAlerts(true, 2, true)
+			}
+			if os.Getenv("FUNDBAR_ALERT_DENIED") != "" {
+				a.PreviewAlertDenied()
+			}
+			if v := os.Getenv("FUNDBAR_TRAY"); v != "" {
+				a.PreviewTrayText(v)
+			}
+			if os.Getenv("FUNDBAR_SHORTCUT") != "" {
+				a.PreviewGlobalShortcut(true)
+			}
+			if os.Getenv("FUNDBAR_INDICES") == "off" {
+				a.PreviewIndices(false)
+			}
+			tester := ui.NewTesterWith(a.PreviewSettings, 480, 760,
 				ui.TesterOptions{Dark: dark})
 			tester.Frame()
+			// FUNDBAR_SCROLL brings a section below the fold into the shot, as
+			// a wheel would: the 数据 section needs it at the window's height.
+			if v := os.Getenv("FUNDBAR_SCROLL"); v != "" {
+				var dy float32
+				fmt.Sscan(v, &dy)
+				tester.Scroll(240, 600, 0, dy)
+				tester.Frame()
+			}
 			img := tester.Image()
 			f, err := os.Create(out)
 			if err != nil {
@@ -78,10 +108,65 @@ func main() {
 			a.PreviewGroup(os.Getenv("FUNDBAR_GROUP"))
 		case "groupnew":
 			a.PreviewGroupEdit()
+		case "targets":
+			if len(os.Args) > 4 {
+				a.PreviewTargets(os.Args[4], 20, 8)
+			}
+		case "targets-edit":
+			a.PreviewEdit(true)
+			if len(os.Args) > 4 {
+				a.PreviewTargets(os.Args[4], 20, 8)
+			}
+		case "portfolio":
+			a.PreviewPortfolio(true)
+		case "compare":
+			// The chart with other funds drawn beside the chosen one.
+			period := 2
+			if v := os.Getenv("FUNDBAR_PERIOD"); v != "" {
+				fmt.Sscan(v, &period)
+			}
+			a.PreviewPeriod(period)
+			codes := strings.Split(os.Getenv("FUNDBAR_COMPARE"), ",")
+			if len(codes) == 1 && strings.TrimSpace(codes[0]) == "" {
+				codes = []string{"008270", "011555", "028678"}
+			}
+			for i := range codes {
+				codes[i] = strings.TrimSpace(codes[i])
+			}
+			a.PreviewCompare(codes...)
+		case "share":
+			// The share picture writes itself; FUNDBAR_SHARE_MONEY shows the
+			// variant with the user's amounts.
+			img := a.SharePreview(os.Getenv("FUNDBAR_SHARE_MONEY") != "")
+			f, err := os.Create(out)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer f.Close()
+			if err := png.Encode(f, img); err != nil {
+				log.Fatal(err)
+			}
+			return
+		case "risk":
+			// Select the window whose risk line the shot is about; 近1年
+			// unless FUNDBAR_PERIOD names another index.
+			period := 3
+			if v := os.Getenv("FUNDBAR_PERIOD"); v != "" {
+				fmt.Sscan(v, &period)
+			}
+			a.PreviewPeriod(period)
+		case "ledger", "ledger-add", "ledger-edit", "ledger-error":
+			if len(os.Args) > 4 {
+				a.PreviewLedger(os.Args[4], os.Args[3])
+			}
 		case "update":
 			a.PreviewUpdate("0.4.1", os.Getenv("FUNDBAR_NOTES"),
 				os.Getenv("FUNDBAR_STEP"), os.Getenv("FUNDBAR_NOTES_OPEN") != "")
 		case "panel":
+			a.PreviewMarketIndices()
+			if os.Getenv("FUNDBAR_INDICES") == "off" {
+				a.PreviewIndices(false)
+			}
 			tester := ui.NewTesterWith(a.Panel, 320, 560,
 				ui.TesterOptions{Dark: dark})
 			tester.Frame()

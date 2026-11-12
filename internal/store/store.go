@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"fundbar/internal/model"
@@ -29,6 +31,19 @@ type Entry struct {
 	// a group the user made to watch funds without holding them. A fund of
 	// an older file names none, and is in the holding group alone.
 	Groups []string `json:"groups,omitempty"`
+	// TakeProfit and StopLoss are the cumulative return, in percent, at which
+	// the app announces the fund: reaching +TakeProfit, or falling to
+	// -StopLoss. Zero leaves the side off, so an older file loads silent.
+	TakeProfit float64 `json:"takeProfit,omitempty"`
+	StopLoss   float64 `json:"stopLoss,omitempty"`
+}
+
+// Alerts are the notification rules the user turned on. A file that names
+// none, as an older one does, has every rule off.
+type Alerts struct {
+	Move    bool    `json:"move,omitempty"`
+	MovePct float64 `json:"movePct,omitempty"`
+	Settled bool    `json:"settled,omitempty"`
 }
 
 // Group is a list of funds the user made to watch, apart from the holding
@@ -58,6 +73,55 @@ type Data struct {
 	// SkippedVersion is the newer version the user ignored: the app offers
 	// the one after it.
 	SkippedVersion string `json:"skippedVersion,omitempty"`
+	// Alerts are the notification rules, nil when the file names none.
+	Alerts *Alerts `json:"alerts,omitempty"`
+	// TrayText is what the menu bar item shows: "money" for the day's gain,
+	// "pct" for the day's change, or "icon" for the icon alone. An older
+	// file names none, and shows the gain as it always did.
+	TrayText string `json:"trayText,omitempty"`
+	// GlobalShortcut turns on the shortcut that opens the panel. An older
+	// file names none, and has it off: a new version does not take keys by
+	// itself.
+	GlobalShortcut bool `json:"globalShortcut,omitempty"`
+	// HideIndices hides the market benchmarks in the panel. Its zero value
+	// is false, which shows them, so an older file gets the row.
+	HideIndices bool `json:"hideIndices,omitempty"`
+	// LowCoverEstimate shows an intraday estimate even when the disclosed
+	// holdings cover less than 20% of the fund. Its zero value is off: a fund
+	// whose disclosed holdings are too small is not estimated, and an older
+	// file keeps that.
+	LowCoverEstimate bool `json:"lowCoverEstimate,omitempty"`
+}
+
+// AlertState is what the alert rules have already announced, kept beside the
+// funds rather than in them, so that a restart does not announce the same
+// thing twice and the user's backup file stays as it was.
+type AlertState struct {
+	// Day is the trading date the marks below belong to. A new date starts
+	// every rule afresh.
+	Day string `json:"day,omitempty"`
+	// Move is the funds the move rule announced today.
+	Move []string `json:"move,omitempty"`
+	// Settled says the settled rule announced today.
+	Settled bool `json:"settled,omitempty"`
+	// Targets are the funds with a price target: whether each side was in its
+	// zone at the last look, and whether it already announced today.
+	Targets map[string]TargetMark `json:"targets,omitempty"`
+}
+
+// TargetMark is one fund's price targets, as the last check left them.
+type TargetMark struct {
+	Up       bool `json:"up,omitempty"`
+	Down     bool `json:"down,omitempty"`
+	UpSent   bool `json:"upSent,omitempty"`
+	DownSent bool `json:"downSent,omitempty"`
+}
+
+// Equal reports that two states hold the same marks, so that a refresh which
+// changed nothing writes no file.
+func (s AlertState) Equal(o AlertState) bool {
+	return s.Day == o.Day && s.Settled == o.Settled &&
+		slices.Equal(s.Move, o.Move) && maps.Equal(s.Targets, o.Targets)
 }
 
 // Load reads the file, and an empty state when there is none.
@@ -80,6 +144,11 @@ func (d *Data) Save(path string) error {
 	if err != nil {
 		return err
 	}
+	return writeFile(path, body)
+}
+
+// writeFile writes body to path whole, in place of what was there.
+func writeFile(path string, body []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -88,6 +157,32 @@ func (d *Data) Save(path string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// alertPath is the file beside the funds that keeps what was announced.
+func alertPath(dir string) string { return filepath.Join(dir, "alerts.json") }
+
+// LoadAlerts reads what the alert rules announced, and an empty state when
+// there is none.
+func LoadAlerts(dir string) *AlertState {
+	s := &AlertState{}
+	body, err := os.ReadFile(alertPath(dir))
+	if err != nil {
+		return s
+	}
+	if json.Unmarshal(body, s) != nil {
+		return &AlertState{}
+	}
+	return s
+}
+
+// SaveAlerts writes what the alert rules announced.
+func SaveAlerts(dir string, s *AlertState) error {
+	body, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFile(alertPath(dir), body)
 }
 
 // Snapshot is what the app read about a fund, kept to open the window with

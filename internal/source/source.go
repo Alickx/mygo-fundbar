@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 
+	"fundbar/internal/calendar"
 	"fundbar/internal/model"
 )
 
@@ -36,7 +37,7 @@ func New() *Client {
 }
 
 // cst is the funds' own time, which their publications follow.
-var cst = time.FixedZone("CST", 8*60*60)
+var cst = calendar.CST
 
 var errNotFound = errors.New("source: not found")
 
@@ -169,27 +170,21 @@ func (c *Client) Fund(ctx context.Context, code string) (*Fund, error) {
 const navHour = 19
 
 // navDue is the newest date whose net asset value should be published by
-// at: today from the evening on, and the previous weekday before that. A
-// fund publishes nothing on a holiday, and the list then simply holds no
-// newer value.
+// at: today from the evening on, and the previous trading day before that. A
+// fund publishes nothing on a weekend or a holiday, and the list then simply
+// holds no newer value.
 func navDue(at time.Time) string {
-	at = at.In(cst)
-	day := at
-	switch at.Weekday() {
-	case time.Saturday:
-		day = at.AddDate(0, 0, -1)
-	case time.Sunday:
-		day = at.AddDate(0, 0, -2)
-	default:
-		// Before the evening's publication, yesterday's value is the newest.
-		if at.Hour() < navHour {
-			day = at.AddDate(0, 0, -1)
-		}
+	t := at.In(cst)
+	// A day the market does not trade publishes nothing, whatever the hour.
+	if !calendar.IsTradingDay(t) {
+		return calendar.PrevTradingDay(t).Format("2006-01-02")
 	}
-	for day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
-		day = day.AddDate(0, 0, -1)
+	// Before the evening's publication, the previous trading day's value is
+	// the newest.
+	if t.Hour() < navHour {
+		return calendar.PrevTradingDay(t).Format("2006-01-02")
 	}
-	return day.Format("2006-01-02")
+	return t.Format("2006-01-02")
 }
 
 // navListEvery is how long to wait before asking the net worth list again
@@ -626,7 +621,15 @@ func (c *Client) quotesChunk(ctx context.Context, symbols []string, out map[stri
 	if err != nil {
 		text = raw
 	}
-	for _, part := range strings.Split(string(text), ";") {
+	parseQuotes(string(text), out)
+	return nil
+}
+
+// parseQuotes reads a GBK-decoded answer of the quote endpoint into out. A
+// stock and an index share the layout: price, the time, and the day's change
+// by the same fields.
+func parseQuotes(text string, out map[string]model.Quote) {
+	for _, part := range strings.Split(text, ";") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -651,7 +654,6 @@ func (c *Client) quotesChunk(ctx context.Context, symbols []string, out map[stri
 		}
 		out[symbol] = q
 	}
-	return nil
 }
 
 func parseQuoteTime(s string) time.Time {

@@ -70,6 +70,7 @@ func main() {
 			fmt.Printf("%s %s 无法估算\n", code, f.Name)
 			continue
 		}
+		est = model.ScaleEstimate(est, f.StockPosition)
 		last := f.Navs[len(f.Navs)-1]
 		rows = append(rows, row{
 			code: code, name: f.Name, cover: est.Cover, est: est.Pct,

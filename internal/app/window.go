@@ -32,6 +32,11 @@ func (a *App) showPanel() {
 	if len(a.funds) == 0 {
 		height = 200
 	}
+	// The benchmarks row takes a line of its own under the summary, which
+	// the first frame has to leave room for before it measures the content.
+	if a.showIndices && len(a.indices) > 0 {
+		height += panelIndicesHeight
+	}
 	p := mygo.NewFlyout(mygo.FlyoutOptions{
 		Tray:      a.tray,
 		Placement: mygo.PlacementBottom,
@@ -217,6 +222,7 @@ func (a *App) TrayMenu() *mygo.Menu {
 	}
 
 	items = append(items, mygo.Separator(),
+		a.shareMenu(len(held) == 0),
 		&mygo.MenuItem{Label: "刷新", Accelerator: "CmdOrCtrl+R",
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.refresh() }},
 		&mygo.MenuItem{Label: "打开面板", Accelerator: "CmdOrCtrl+Shift+O",

@@ -14,6 +14,8 @@ cd mygo-fundbar
 go run .
 ```
 
+系统通知只在打包后的应用中可用：`go run .` 运行时，设置里的「提醒」会注明不支持；要试提醒，用 `go tool mygo dev` 运行。
+
 ## 质量检查
 
 提交代码前运行与 CI 一致的检查。`gofmt -l .` 应无输出，其余命令应正常通过。
@@ -74,9 +76,18 @@ go run ./tools/shot /tmp/fundbar-search.png light search
 go run ./tools/shot /tmp/fundbar-empty.png light empty
 FUNDBAR_GROUP=关注 go run ./tools/shot /tmp/fundbar-group.png light group
 go run ./tools/shot /tmp/fundbar-panel.png light panel
+go run ./tools/shot /tmp/fundbar-portfolio.png light portfolio
+go run ./tools/shot /tmp/fundbar-ledger.png light ledger 007760
+go run ./tools/shot /tmp/fundbar-ledger-add.png light ledger-add 007760
+go run ./tools/shot /tmp/fundbar-ledger-edit.png light ledger-edit 007760
+go run ./tools/shot /tmp/fundbar-ledger-error.png light ledger-error 007760
+FUNDBAR_PERIOD=6 go run ./tools/shot /tmp/fundbar-risk.png light risk 007760
+FUNDBAR_PERIOD=3 FUNDBAR_COMPARE=021528,159992,028678 \
+  go run ./tools/shot /tmp/fundbar-compare.png light compare 007760
+FUNDBAR_SHARE_MONEY=1 go run ./tools/shot /tmp/fundbar-share.png light share
 ```
 
-参数顺序为：输出路径、主题（`light` / `dark`）、场景（`normal` / `settings` / `edit` / `search` / `empty` / `group` / `groupnew` / `panel`）、选中的基金代码。`group` 场景用 `FUNDBAR_GROUP` 指定要展示的分组名称。`panel` 场景按系统毛玻璃渲染小窗，再铺一层灰色渐变作底，用来核对小窗在材质上的对比度。
+参数顺序为：输出路径、主题（`light` / `dark`）、场景（`normal` / `settings` / `edit` / `search` / `batch` / `empty` / `group` / `groupnew` / `panel` / `portfolio` / `ledger` / `ledger-add` / `ledger-edit` / `ledger-error` / `risk` / `compare` / `share`）、选中的基金代码。`batch` 场景用 `FUNDBAR_BATCH` 指定搜索框里的代码串，展示批量添加行；设置窗口截图可用 `FUNDBAR_SCROLL` 指定滚动距离（如 `600`），把「数据」一节带进画面。`risk` 场景用 `FUNDBAR_PERIOD` 选择走势图的周期，序号依次为 0–6（近1月、近3月、近6月、近1年、今年来、近3年、成立以来），用来核对风险指标行与长周期的年份刻度。`compare` 场景同样用 `FUNDBAR_PERIOD` 选周期，用 `FUNDBAR_COMPARE` 给出最多三只基金的代码，核对对比曲线与图例。`share` 场景不画窗口，而是直接写出分享图；`FUNDBAR_SHARE_MONEY=1` 展示含金额的版本。`group` 场景用 `FUNDBAR_GROUP` 指定要展示的分组名称。`ledger` 系列场景用第四个参数指定基金代码，并在内存中准备示例（或该基金已有的）交易记录，不会写入数据目录；`ledger-add` 和 `ledger-edit` 打开新增或编辑表单，`ledger-error` 展示交易记录有误时的提示行。`panel` 场景按系统毛玻璃渲染小窗，再铺一层灰色渐变作底，用来核对小窗在材质上的对比度。
 
 ```sh
 FUNDBAR_DIR=/tmp/fundbar-preview FUNDBAR_W=900 FUNDBAR_H=600 \
@@ -99,6 +110,8 @@ go run ./tools/genicon
 main.go              应用入口、主窗口与菜单栏初始化
 internal/
   app/               窗口、界面、刷新调度与状态管理
+  calendar/          A 股休市日表与交易日判断
+  ledger/            交易记录与持仓计算
   model/             数据类型与估值算法
   source/            基金资料与股票行情适配器
   store/             自选配置与本地缓存
@@ -110,16 +123,32 @@ tools/
 mygo.json            应用元数据与打包配置
 ```
 
+## 每年更新交易日历
+
+[`internal/calendar/calendar.go`](../internal/calendar/calendar.go) 的 `closures` 表列出周末之外的 A 股休市日，刷新调度与净值日期判断都读它。表未覆盖的年份按周一至周五视为交易日，因此每年发布新版时，应依据国务院办公厅的次年节假日安排（以及沪深交易所的休市安排）补上下一年：只列入落在周一至周五的休市日，周末调休上班日仍按周末休市。
+
+2026 年的表由三只长历史基金都没有公布净值的工作日反推，并与公开的节假日安排核对；2027 年的表依据国务院办公厅《关于2027年部分节假日安排的通知》（国办发明电〔2026〕10号，2026-11-05）编制。
+
 ## 本地数据
 
 默认目录为 `~/Library/Application Support/FundBar/`：
 
 | 文件 | 用途 |
 | --- | --- |
-| `funds.json` | 自选基金、分组、份额、成本价、选中项及部分界面设置 |
+| `funds.json` | 自选基金、分组、份额、成本价、止盈止损、提醒开关、选中项及部分界面设置 |
+| `ledger/<基金代码>.json` | 该基金的全部交易记录；份额与成本由它重放得出，`funds.json` 里保留一份镜像供旧版本读取 |
+| `alerts.json` | 已发出的提醒记录：当天提醒过哪些基金，以及各基金是否已在止盈 / 止损区间内；重启后不重复发送 |
+| `estimates.json` | 盘中估值与当晚公布净值的对照记录：每只基金最近 60 个交易日的估值、覆盖率与已公布涨跌，用于显示「估值偏差」 |
 | `cache/<基金代码>.json` | 基金资料、历史净值、持仓与行情快照 |
+| `backups/导入前 <时间>.json` | 每次导入备份前自动留下的旧数据，文件名如 `导入前 20261112-041500.json` |
 
-可在应用设置中打开数据目录或清空缓存。备份自选与手动持仓时，请保留 `funds.json`。
+可在应用设置中打开数据目录或清空缓存。备份自选与手动持仓时，请保留 `funds.json`；使用了交易记录的基金还要保留 `ledger/` 目录。`alerts.json` 与 `estimates.json` 只是本地记录，不需要备份。
+
+### 备份与迁移
+
+设置 → 数据里的「导出备份…」把 `funds.json`（自选、分组、份额、成本价与界面设置）和 `ledger/` 里的交易记录写成一个 JSON 文件：`{"app":"FundBar","version":1,"exported":"<RFC 3339>","funds":{...},"ledgers":{"<基金代码>":[...]}}`。缓存、`alerts.json` 与 `estimates.json` 不在其中：前者是网络能再取回的资料，后两者是本机的提醒与估值记录。换电脑时把这个文件带走即可。
+
+「导入备份…」会先校验应用名、版本、自选数据与每一笔交易记录，任何一项不合格都会说明原因并保持原样；确认导入后，当前数据会先写进 `backups/导入前 <时间>.json`，再替换自选与交易记录，最后重新载入界面。持仓表可用「导出 CSV…」导出为带 BOM 的 UTF-8 表格，Excel 能直接打开。
 
 ## 签名与发布
 

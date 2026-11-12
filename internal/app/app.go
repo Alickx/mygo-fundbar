@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"fundbar/internal/calendar"
+	"fundbar/internal/ledger"
 	"fundbar/internal/model"
 	"fundbar/internal/source"
 	"fundbar/internal/store"
@@ -27,9 +30,24 @@ type Fund struct {
 	Type   string
 	Shares float64
 	Cost   float64
-	// sharesText and costText are the holding form's fields as typed, which
-	// the frame after the edit opens fills in from the values.
+	// Txns are the fund's transactions, and pos, steps and ledgerErr what
+	// replaying them says: the position the shares mirror, each row's own
+	// result, and the first problem the rows have. ledgerErr also carries why
+	// the rows could not be read at all (store.ErrLedgerUnreadable). A fund
+	// with no rows keeps its position typed by hand.
+	Txns      []ledger.Txn
+	pos       ledger.Position
+	steps     []ledger.Step
+	ledgerErr error
+	// TakeProfit and StopLoss are the cumulative return, in percent, at which
+	// the app announces the fund. Zero leaves that side off.
+	TakeProfit float64
+	StopLoss   float64
+	// sharesText, costText, takeText and stopText are the holding form's
+	// fields as typed, which the frame after the edit opens fills in from
+	// the values.
 	sharesText, costText string
+	takeText, stopText   string
 	editText             bool
 	// Groups are the groups the fund is listed in: "" is the holding group,
 	// the main list of funds the user holds or follows, and any other id is
@@ -134,33 +152,99 @@ func (f *Fund) Stale() bool {
 // Value is what the user's shares are worth.
 func (f *Fund) Value() float64 { return f.Shares * f.EstNav() }
 
+// todayShares is how many shares earned the change of the day the app shows.
+// A fund with a ledger held them before that day began: a share bought on
+// the day did not earn its change, and one sold that day still did. A
+// position typed by hand has no days, and is taken as held throughout.
+func (f *Fund) todayShares() float64 {
+	if !f.ledgered() {
+		return f.Shares
+	}
+	day := ""
+	if f.UsingEstimate() {
+		day = f.QuoteAt.In(cst).Format("2006-01-02")
+	} else if last, ok := f.LastNav(); ok {
+		day = last.Date
+	}
+	return ledger.SharesBefore(f.Txns, day)
+}
+
 // TodayProfit is what the user's shares gained in the newest day the app
 // knows of, in money: today's estimate while the markets are open, and the
 // published change of the last trading day once its value is out.
 func (f *Fund) TodayProfit() float64 {
-	if f.Shares == 0 {
+	shares := f.todayShares()
+	if shares == 0 {
 		return 0
 	}
 	if f.UsingEstimate() {
 		last, _ := f.LastNav()
-		return f.Shares * (f.EstNav() - last.Unit)
+		return shares * (f.EstNav() - last.Unit)
 	}
 	if n := len(f.Navs); n >= 2 {
-		return f.Shares * (f.Navs[n-1].Unit - f.Navs[n-2].Unit)
+		prev, last := f.Navs[n-2], f.Navs[n-1]
+		return shares * prev.Unit * model.DayReturn(prev, last) / 100
 	}
 	return 0
 }
 
-// TotalProfit is what the user's shares gained since they bought them.
+// todayBase is what the shares that earned the day's change were worth when
+// the day began: what the day's gain is a percent of. It is not the value
+// now less the gain, which a purchase or a sale during the day would bend.
+func (f *Fund) todayBase() float64 {
+	shares := f.todayShares()
+	if shares == 0 {
+		return 0
+	}
+	if f.UsingEstimate() {
+		last, _ := f.LastNav()
+		return shares * last.Unit
+	}
+	switch n := len(f.Navs); {
+	case n >= 2:
+		return shares * f.Navs[n-2].Unit
+	case n == 1:
+		// One value says nothing of a change: the shares count as unmoved.
+		return shares * f.Navs[0].Unit
+	}
+	return 0
+}
+
+// TotalProfit is what the user's shares gained since they bought them: what
+// the shares held are worth now, less what they cost, plus what sales took
+// and dividends paid.
 func (f *Fund) TotalProfit() float64 {
+	if f.ledgered() {
+		return f.Shares*f.EstNav() - f.pos.Basis + f.pos.Realized + f.pos.Dividends
+	}
 	if f.Shares == 0 {
 		return 0
 	}
 	return f.Shares*f.EstNav() - f.Shares*f.Cost
 }
 
+// HoldingPct is the return on the shares held now, in percent: the current
+// value against their average cost. It says nothing about sales already
+// made; TotalPct does.
+func (f *Fund) HoldingPct() float64 {
+	// An opening position whose cost was never filled in leaves the average
+	// cost too low to compare a price with.
+	if f.Cost <= 0 || f.pos.CostUnknown {
+		return 0
+	}
+	return (f.EstNav()/f.Cost - 1) * 100
+}
+
 // TotalPct is TotalProfit as a share of what the shares cost.
 func (f *Fund) TotalPct() float64 {
+	if f.ledgered() {
+		// With an opening position of unknown cost, the money put in is not
+		// all there to divide by.
+		if f.pos.Invested <= 0 || f.pos.CostUnknown {
+			return 0
+		}
+		return f.TotalProfit() / f.pos.Invested * 100
+	}
 	if f.Shares == 0 || f.Cost <= 0 {
 		return 0
 	}
@@ -202,10 +286,22 @@ type App struct {
 	sel     int
 	period  int
 	pick    int
+	// compare is the funds drawn beside the chosen one, by code. It is
+	// session state: the chart's comparison is not saved, and choosing a
+	// fund or removing one takes it out here.
+	compare []string
 	// navView is the history the chart card shows: the line, or a list of
 	// each day's value.
 	navView int
 	query   string
+	// portfolio shows the holding group's look-through in place of a fund's
+	// detail. It is session state: neither a launch nor a new window resumes
+	// it, and nothing about it is saved. listSel is the row the list chooses
+	// while the pane shows: the pane leaves no fund looking chosen, but a
+	// click on any row, the chosen fund's included, says which fund to show
+	// on the way out, and the next frame reads it here.
+	portfolio bool
+	listSel   int
 
 	// groupEditing unfolds the field of a new or renamed group, whose id is
 	// groupEditID ("" while the group is new).
@@ -227,16 +323,84 @@ type App struct {
 	// savedSidebar what the file has.
 	sidebarWidth float32
 	savedSidebar float32
-	// editing unfolds the fields of the shares held.
+	// editing unfolds the holding card: the fields of the shares held, or
+	// the ledger's rows and form.
 	editing bool
-	// settings is the settings window, while it is open.
+	// tx is the transaction the ledger card edits, wantTxEdit and
+	// wantTxDelete what a click or a menu asked for, done before the next
+	// frame, and wantManual the fund a menu returns to a position typed by
+	// hand. txNote is a line the card shows once, with txUndo's rows to put
+	// back after a delete.
+	tx           txForm
+	wantTxEdit   txRef
+	wantTxDelete txRef
+	wantManual   string
+	txNote       string
+	txUndo       ledgerUndo
+	// holdBodyH is the height the unfolded card took last frame, which the
+	// card animates between.
+	holdBodyH float32
+	// settings is the settings window, while it is open. dataErr is why the
+	// last backup, import or export failed, which it shows under the 数据
+	// section.
 	settings     *mygo.Window
 	settingsErr  string
+	dataErr      string
 	previewLogin bool
+	// saveFile, openFile and confirm are the native dialogs the backup and
+	// the export ask with. They block until dismissed, so a caller runs them
+	// off the main thread; a test replaces them, and the defaults do nothing
+	// without a running app.
+	saveFile func(mygo.SaveDialogOptions) (string, error)
+	openFile func(mygo.OpenDialogOptions) ([]string, error)
+	confirm  func(mygo.MessageOptions) (mygo.MessageResult, error)
+	// writeImage puts a PNG on the clipboard for the share picture. It is a
+	// field, as the dialogs are, so that a test sees the bytes; its default
+	// does nothing until a real app is running.
+	writeImage func([]byte) error
+	// trayText is what the menu bar item shows beside the icon, one of the
+	// trayMoney, trayPct and trayIcon modes; a preview of an older file
+	// leaves it as the gain.
+	trayText string
+	// globalShortcut is whether the panel's shortcut is on. The two fields
+	// below do the registering, so a test sees the calls without a running
+	// app, as notify does; the defaults do nothing until the app is ready.
+	globalShortcut     bool
+	registerShortcut   func(acc string, fn func()) error
+	unregisterShortcut func(acc string)
+	// showIndices is the panel's row of market benchmarks, and indices are
+	// what the last refresh read, kept in memory rather than in a fund's
+	// cache because no fund owns them.
+	showIndices bool
+	indices     []model.Quote
+	// lowCoverEstimate shows an estimate for funds whose disclosed holdings
+	// cover less than minCover, as the settings switch asks.
+	lowCoverEstimate bool
 
 	hits      []source.Hit
 	searching bool
 	searchID  int
+
+	// alerts are the notification rules the settings set, alertState what
+	// they have announced so far, and notify what shows a note the rules
+	// decided on; a test replaces notify.
+	alerts     store.Alerts
+	alertState store.AlertState
+	notify     func(Note)
+	// estimates is how close the app's estimates have been to the values the
+	// funds published, kept beside the funds as the alert marks are.
+	// estimatesDirty says they hold something the file does not yet: loading
+	// settles open estimates from the cache without writing, and the next
+	// refresh saves them.
+	estimates      store.Estimates
+	estimatesDirty bool
+	// alertText is the move threshold as typed, and alertSeeded says it was
+	// filled in from the setting for the window that is open.
+	alertText   string
+	alertSeeded bool
+	// alertErr is why notifications do not arrive, such as a denied
+	// permission, which the settings window shows.
+	alertErr string
 
 	busy    bool
 	updated time.Time
@@ -271,13 +435,13 @@ type App struct {
 }
 
 // cst is the time zone the funds trade in.
-var cst = time.FixedZone("CST", 8*60*60)
+var cst = calendar.CST
 
 func now() time.Time { return time.Now().In(cst) }
 
 // New makes the app, whose files live in dir.
 func New(dir string) *App {
-	return &App{
+	a := &App{
 		src:           source.New(),
 		dir:           dir,
 		config:        filepath.Join(dir, "funds.json"),
@@ -285,17 +449,87 @@ func New(dir string) *App {
 		pendingLeave:  -1,
 		wantJoin:      -1,
 		pick:          -1,
+		listSel:       -1,
 		selCode:       map[string]string{},
+		estimates:     store.Estimates{},
+		trayText:      trayMoney,
+		showIndices:   true,
 	}
+	a.notify = a.deliver
+	// The dialogs belong to a running app only; a preview or a test has no
+	// native window to attach them to, and gets no answer.
+	a.saveFile = func(o mygo.SaveDialogOptions) (string, error) {
+		if !mygo.App.IsReady() {
+			return "", nil
+		}
+		return mygo.Dialog.Save(o)
+	}
+	a.openFile = func(o mygo.OpenDialogOptions) ([]string, error) {
+		if !mygo.App.IsReady() {
+			return nil, nil
+		}
+		return mygo.Dialog.Open(o)
+	}
+	a.confirm = func(o mygo.MessageOptions) (mygo.MessageResult, error) {
+		if !mygo.App.IsReady() {
+			return mygo.MessageResult{Button: -1}, nil
+		}
+		return mygo.Dialog.Message(o)
+	}
+	a.writeImage = func(data []byte) error {
+		if !mygo.App.IsReady() {
+			return nil
+		}
+		return mygo.Clipboard.WriteImage(data)
+	}
+	// The real shortcut is claimed only by a running app; a test replaces
+	// these two before calling Start or the switch, and sees each call.
+	a.registerShortcut = func(acc string, fn func()) error {
+		if !mygo.App.IsReady() {
+			return nil
+		}
+		return mygo.GlobalShortcut.Register(acc, fn)
+	}
+	a.unregisterShortcut = func(acc string) {
+		if mygo.App.IsReady() {
+			mygo.GlobalShortcut.Unregister(acc)
+		}
+	}
+	return a
 }
 
 // Start reads the funds the user follows and the cache of what was read
 // about them, and starts asking the network.
 func (a *App) Start() {
 	a.Load()
+	a.setAsideUnreadable()
+	if a.globalShortcut {
+		// The saved setting is on: claim the keys again for this run.
+		a.applyGlobalShortcut(true)
+	}
 	a.refresh()
-	go a.loop()
+	if a.win != nil {
+		// A test or a preview has no window to bring the answers back to.
+		go a.loop()
+	}
 	a.watchUpdates()
+	a.watchNotifications()
+}
+
+// setAsideUnreadable moves the ledger files that did not parse out of the
+// way, once, as the app starts: recording a transaction would otherwise
+// write a new ledger over rows a person may still recover. Load itself
+// leaves them where they are, because a preview loads too and must not move
+// the user's files.
+func (a *App) setAsideUnreadable() {
+	for _, f := range a.all {
+		if !errors.Is(f.ledgerErr, store.ErrLedgerUnreadable) {
+			continue
+		}
+		if _, err := store.SetAsideLedger(a.dir, f.Code); err != nil {
+			a.failure = "交易记录读取失败：" + f.Code + "（" + err.Error() + "）"
+		}
+	}
 }
 
 // Load reads the funds the user follows and the cache of what was read
@@ -306,6 +540,12 @@ func (a *App) Load() {
 	a.sel = -1
 	data := store.Load(a.config)
 	a.groups = data.Groups
+	a.alerts = store.Alerts{}
+	if data.Alerts != nil {
+		a.alerts = *data.Alerts
+	}
+	a.alertState = *store.LoadAlerts(a.dir)
+	a.estimates = store.LoadEstimates(a.dir)
 	a.selCode = map[string]string{}
 	if data.Selected != "" {
 		a.selCode[""] = data.Selected
@@ -319,14 +559,33 @@ func (a *App) Load() {
 	if a.group != "" && !a.hasGroup(a.group) {
 		a.group = ""
 	}
+	// The setting decides what a cached fund's estimate is worth as it is
+	// filled in below, so it is read before the funds.
+	a.lowCoverEstimate = data.LowCoverEstimate
 	for _, e := range data.Funds {
 		groups := e.Groups
 		if len(groups) == 0 {
 			groups = []string{""}
 		}
-		f := &Fund{Code: e.Code, Type: e.Type, Shares: e.Shares, Cost: e.Cost, Groups: groups}
+		f := &Fund{
+			Code: e.Code, Type: e.Type, TakeProfit: e.TakeProfit,
+			StopLoss: e.StopLoss, Groups: groups,
+		}
+		f.Shares, f.Cost = e.Shares, e.Cost
+		a.adoptLedger(f)
+		if f.ledgerErr != nil && !f.ledgered() {
+			// The status line's word goes with the next refresh; the fund's
+			// own card keeps saying it.
+			a.failure = "交易记录读取失败：" + e.Code
+		}
 		if snap, ok := store.LoadSnapshot(a.dir, e.Code); ok {
 			a.fill(f, snap)
+			// The cached values can settle an estimate that was still open
+			// when the app last closed. Loading writes no file, as the
+			// screenshot tool relies on: the next refresh saves it.
+			if a.fillActuals(f) {
+				a.estimatesDirty = true
+			}
 		}
 		a.all = append(a.all, f)
 	}
@@ -334,6 +593,14 @@ func (a *App) Load() {
 	a.navView = data.NavView
 	a.sidebarWidth = data.SidebarWidth
 	a.skippedVersion = data.SkippedVersion
+	// The three settings an older file does not name fall back to what the
+	// app did before them: the gain, no shortcut, and the benchmarks shown.
+	a.trayText = data.TrayText
+	if a.trayText == "" {
+		a.trayText = trayMoney
+	}
+	a.globalShortcut = data.GlobalShortcut
+	a.showIndices = !data.HideIndices
 	if a.sidebarWidth == 0 {
 		a.sidebarWidth = 348
 	}
@@ -353,6 +620,12 @@ func (a *App) fill(f *Fund, snap *store.Snapshot) {
 	a.estimate(f, snap.Quotes)
 }
 
+// minCover is the share of the fund the disclosed holdings have to cover for
+// its estimate to be shown by default: below it, the lot says too little of
+// what the fund owns. The settings can show the estimate anyway, marked with
+// its coverage.
+const minCover = 20.0
+
 // estimate works the fund's change today out of its holdings and their
 // prices, keyed by symbol.
 func (a *App) estimate(f *Fund, quotes map[string]model.Quote) {
@@ -360,26 +633,61 @@ func (a *App) estimate(f *Fund, quotes map[string]model.Quote) {
 		f.Quotes = quotes
 	}
 	f.Est, f.HasEst = model.EstimateFund(f.Holdings, f.Quotes)
+	if f.HasEst {
+		// The holdings are the fund's stocks; bonds and cash do not move with
+		// them, so the holdings' change comes down to the stock position.
+		f.Est = model.ScaleEstimate(f.Est, f.StockPosition)
+	}
 	// A fund that holds an exchange-traded fund, or few stocks, cannot be
 	// estimated from its holdings.
-	if f.HasEst && f.Est.Cover < 20 {
+	if f.HasEst && f.Est.Cover < minCover && !a.lowCoverEstimate {
 		f.HasEst = false
 	}
 	f.QuoteAt = latestQuote(f.Quotes, f.Holdings)
 }
 
+// setLowCoverEstimate turns on or off the estimate for thinly disclosed
+// funds, and works out the loaded funds again with the new rule.
+func (a *App) setLowCoverEstimate(on bool) {
+	a.lowCoverEstimate = on
+	for _, f := range a.all {
+		a.estimate(f, nil)
+	}
+	a.save()
+	a.redraw()
+}
+
 // save writes the funds the user follows.
 func (a *App) save() {
 	a.syncSelection()
+	// The default mode writes nothing, so a file from before the setting
+	// stays as it was until the user chooses another mode.
+	trayText := a.trayText
+	if trayText == trayMoney {
+		trayText = ""
+	}
 	data := &store.Data{
 		Period: a.period, NavView: a.navView, SidebarWidth: a.sidebarWidth,
 		Groups: a.groups, ActiveGroup: a.group, Selected: a.selCode[""],
 		SkippedVersion: a.skippedVersion,
+		TrayText:       trayText, GlobalShortcut: a.globalShortcut,
+		HideIndices: !a.showIndices, LowCoverEstimate: a.lowCoverEstimate,
+	}
+	if a.alerts != (store.Alerts{}) {
+		// The file names the rules once the user has set one, and not before,
+		// so that it stays as it was for everyone who has none.
+		data.Alerts = &a.alerts
 	}
 	for _, f := range a.all {
+		shares, cost := f.Shares, f.Cost
+		if f.ledgered() {
+			// The entry keeps the position the ledger derives, so that a
+			// build that knows nothing of ledgers still shows it.
+			shares, cost = f.pos.Shares, f.pos.Cost
+		}
 		data.Funds = append(data.Funds, store.Entry{
-			Code: f.Code, Type: f.Type, Shares: f.Shares, Cost: f.Cost,
-			Groups: f.Groups,
+			Code: f.Code, Type: f.Type, Shares: shares, Cost: cost,
+			TakeProfit: f.TakeProfit, StopLoss: f.StopLoss, Groups: f.Groups,
 		})
 	}
 	for id, code := range a.selCode {
@@ -396,6 +704,53 @@ func (a *App) save() {
 	}
 }
 
+// marketIndices are the benchmarks the panel shows, in its order, with the
+// short name it has room for. The same Tencent endpoint that prices stocks
+// answers for indices with the same fields.
+var marketIndices = []struct {
+	Symbol string
+	Label  string
+}{
+	{"sh000001", "上证"},
+	{"sh000300", "沪深300"},
+	{"sz399006", "创业板"},
+}
+
+// indexSymbols is the symbols of the benchmarks, as the quotes request asks
+// for them.
+func indexSymbols() []string {
+	out := make([]string, len(marketIndices))
+	for i, m := range marketIndices {
+		out[i] = m.Symbol
+	}
+	return out
+}
+
+// splitIndices takes the benchmarks out of a quote map, in the panel's order.
+// They arrive in the same request as the funds' stocks, but belong to the app
+// rather than to any fund: left in, they would be written into every fund's
+// cache file.
+func splitIndices(quotes map[string]model.Quote) []model.Quote {
+	var out []model.Quote
+	for _, m := range marketIndices {
+		if q, ok := quotes[m.Symbol]; ok {
+			out = append(out, q)
+			delete(quotes, m.Symbol)
+		}
+	}
+	return out
+}
+
+// indexLabel is the short name the panel gives a benchmark.
+func indexLabel(symbol string) string {
+	for _, m := range marketIndices {
+		if m.Symbol == symbol {
+			return m.Label
+		}
+	}
+	return symbol
+}
+
 // Selected is the fund the detail pane shows, or nil.
 func (a *App) Selected() *Fund {
 	if a.sel < 0 || a.sel >= len(a.funds) {
@@ -408,6 +763,11 @@ func (a *App) Selected() *Fund {
 // when it is in.
 func (a *App) refresh() {
 	if a.busy || len(a.all) == 0 {
+		return
+	}
+	// A preview or a test draws the app without a window: there is nowhere to
+	// bring the answer back to, and no network is asked.
+	if a.win == nil {
 		return
 	}
 	a.busy = true
@@ -469,9 +829,25 @@ func (a *App) refresh() {
 				}
 			}
 		}
+		// The benchmarks ride along in the one request, and leave the map
+		// before the funds take it over.
+		for _, symbol := range indexSymbols() {
+			if !seen[symbol] {
+				seen[symbol] = true
+				symbols = append(symbols, symbol)
+			}
+		}
 		quotes, profiles, qerr := a.priceAndProfile(ctx, symbols, profileSymbols)
+		indices := splitIndices(quotes)
+		if qerr != nil {
+			// A failed request leaves no row, as a preview shows no row
+			// before the first refresh.
+			indices = nil
+		}
 
 		a.win.Update(func() {
+			a.indices = indices
+			changed := false
 			for _, r := range results {
 				f := a.byCode(r.code)
 				if f == nil {
@@ -496,6 +872,12 @@ func (a *App) refresh() {
 				a.fill(f, r.snap)
 				f.Err = ""
 				store.SaveSnapshot(a.dir, f.Code, r.snap)
+				if a.fillActuals(f) {
+					changed = true
+				}
+			}
+			if a.recordEstimates(now()) {
+				changed = true
 			}
 			a.busy = false
 			a.updated = time.Now()
@@ -504,6 +886,13 @@ func (a *App) refresh() {
 			if qerr != nil {
 				a.failure = "行情获取失败：" + qerr.Error()
 			}
+			if changed || a.estimatesDirty {
+				a.estimatesDirty = false
+				if err := store.SaveEstimates(a.dir, a.estimates); err != nil && a.failure == "" {
+					a.failure = "保存估值记录失败：" + err.Error()
+				}
+			}
+			a.runAlerts()
 			a.updateTray()
 			a.redrawPanel()
 		})
@@ -569,22 +958,26 @@ func (a *App) priceAndProfile(ctx context.Context, symbols, profileSymbols []str
 	return quotes, profiles, qerr
 }
 
-// fresh reports that a snapshot's net asset values are today's, or that the
-// market has not published today's yet and they are the newest.
-func fresh(snap *store.Snapshot) bool {
+// fresh reports that a snapshot's net asset values are the newest the market
+// has published.
+func fresh(snap *store.Snapshot) bool { return freshAt(snap, now()) }
+
+// freshAt is fresh at a given time.
+func freshAt(snap *store.Snapshot, at time.Time) bool {
 	if snap == nil || snap.Fund == nil || len(snap.Fund.Navs) == 0 {
 		return false
 	}
 	last := snap.Fund.Navs[len(snap.Fund.Navs)-1].Date
-	today := now().Format("2006-01-02")
-	if last == today {
+	t := at.In(cst)
+	if last == t.Format("2006-01-02") {
+		return true
+	}
+	// A closed market publishes nothing, so the last value stays the newest.
+	if !calendar.IsTradingDay(t) {
 		return true
 	}
 	// Before the evening's publication, yesterday's value is the newest.
-	if h := now().Hour(); h < 20 && now().Weekday() != time.Saturday && now().Weekday() != time.Sunday {
-		return true
-	}
-	return false
+	return t.Hour() < 20
 }
 
 func cachedHoldings(s *store.Snapshot) []model.Holding {
@@ -654,10 +1047,12 @@ func (a *App) loop() {
 }
 
 // tradingNow reports whether the exchanges are open.
-func tradingNow() bool {
-	t := now()
-	switch t.Weekday() {
-	case time.Saturday, time.Sunday:
+func tradingNow() bool { return tradingAt(now()) }
+
+// tradingAt reports whether the exchanges are open at t.
+func tradingAt(t time.Time) bool {
+	t = t.In(cst)
+	if !calendar.IsTradingDay(t) {
 		return false
 	}
 	m := t.Hour()*60 + t.Minute()
@@ -679,7 +1074,17 @@ func (a *App) Add(hit source.Hit) {
 		a.choose(f.Code)
 		return
 	}
+	if !store.ValidCode(hit.Code) {
+		// A code names files in the data directory; anything else is not
+		// followed there, wherever the hit came from.
+		a.failure = "基金代码无效：" + hit.Code
+		return
+	}
 	f := &Fund{Code: hit.Code, Name: hit.Name, Type: hit.Type, Groups: []string{a.group}}
+	// A ledger file found for the code is this fund's history — one written
+	// in an earlier run, or one the user put back by hand after removing the
+	// fund — so it is taken up rather than thrown away.
+	a.adoptLedger(f)
 	a.all = append(a.all, f)
 	a.selCode[a.group] = f.Code
 	a.rebuildList()
@@ -694,7 +1099,14 @@ func (a *App) Remove(i int) {
 		return
 	}
 	store.DropSnapshot(a.dir, f.Code)
+	// The transactions are the one thing here the network cannot give back:
+	// they are set aside rather than deleted, so that a fund removed by
+	// mistake can have them put back by hand.
+	store.ShelveLedger(a.dir, f.Code)
 	a.all = dropFund(a.all, f)
+	a.pruneEstimates()
+	// A fund that is no longer followed cannot stay in the comparison.
+	a.pruneCompare("")
 	for id, code := range a.selCode {
 		if code == f.Code {
 			delete(a.selCode, id)
@@ -819,6 +1231,14 @@ func (a *App) search(q string) {
 		a.searching = false
 		return
 	}
+	if _, ok := batchCodes(q); ok {
+		// A batch of codes needs no search: its row adds them all at once,
+		// and a search already in flight no longer matters.
+		a.searchID++
+		a.hits = nil
+		a.searching = false
+		return
+	}
 	a.searchID++
 	id := a.searchID
 	a.searching = true
@@ -863,14 +1283,26 @@ func (a *App) GroupSummary(group string) Summary {
 
 // summarize adds up the funds, counting their shares when asked to.
 func (a *App) summarize(funds []*Fund, held bool) Summary {
+	return summarizeFunds(funds, held)
+}
+
+// summarizeFunds adds up the funds, counting their shares when asked to. It
+// is a function of its own so that the alert rules can say what the menu bar
+// says without the app around them.
+func summarizeFunds(funds []*Fund, held bool) Summary {
 	var s Summary
-	var value float64
+	// base is what the shares that earned the day's change were worth when
+	// the day began, which the day's percent is measured against.
+	var base float64
 	for _, f := range funds {
-		if held && f.Shares > 0 {
+		// A fund sold out during the day holds nothing now, but its shares
+		// earned the day's change before they went, so it still counts.
+		began := f.todayBase()
+		if held && (f.Shares > 0 || began > 0) {
 			s.Holding = true
 			s.Value += f.Value()
 			s.Profit += f.TodayProfit()
-			value += f.Value()
+			base += began
 		}
 		switch {
 		case f.ChangePct() > 0:
@@ -880,9 +1312,8 @@ func (a *App) summarize(funds []*Fund, held bool) Summary {
 		}
 	}
 	if s.Holding {
-		last := value - s.Profit
-		if last > 0 {
-			s.Pct = s.Profit / last * 100
+		if base > 0 {
+			s.Pct = s.Profit / base * 100
 		}
 	} else {
 		// Without shares, the funds' average change says the same thing.
@@ -901,6 +1332,39 @@ func (a *App) summarize(funds []*Fund, held bool) Summary {
 	return s
 }
 
+// The menu bar item's modes: the day's gain in money, as it always showed;
+// the day's percent; or no text beside the icon for a shared screen.
+const (
+	trayMoney = "money"
+	trayPct   = "pct"
+	trayIcon  = "icon"
+)
+
+// trayModes and trayLabels are the modes and their names, in the order the
+// settings offer them.
+var (
+	trayModes  = []string{trayMoney, trayPct, trayIcon}
+	trayLabels = []string{"收益金额", "涨跌幅", "仅图标"}
+)
+
+// trayModeIndex is the index of a mode among the settings' choices, and
+// trayModeName the mode an index names.
+func trayModeIndex(mode string) int {
+	for i, m := range trayModes {
+		if m == mode {
+			return i
+		}
+	}
+	return 0
+}
+
+func trayModeName(i int) string {
+	if i < 0 || i >= len(trayModes) {
+		return trayMoney
+	}
+	return trayModes[i]
+}
+
 // window title text of the menu bar item, kept as wide as it can be so that
 // the icon does not move as the numbers change.
 func (a *App) trayTitle() string {
@@ -908,13 +1372,52 @@ func (a *App) trayTitle() string {
 	if len(a.all) == 0 || len(a.inGroup(holdingGroup)) == 0 {
 		return ""
 	}
-	var text string
-	if s.Holding {
-		text = fmt.Sprintf("%+.2f", s.Profit)
-	} else {
-		text = fmt.Sprintf("%+.2f%%", s.Pct)
+	switch a.trayText {
+	case trayIcon:
+		return ""
+	case trayPct:
+		// The holding's own percent when shares are held, the average
+		// otherwise, which is what Summary already says.
+		return padFigures(pct(s.Pct), 7)
 	}
-	return padFigures(text, 7)
+	if s.Holding {
+		return padFigures(fmt.Sprintf("%+.2f", s.Profit), 7)
+	}
+	return padFigures(pct(s.Pct), 7)
+}
+
+// globalShortcutKeys is the accelerator the settings turn on, in the syntax
+// the menus use. Ctrl and Alt are the control and option keys on a Mac.
+const globalShortcutKeys = "Ctrl+Alt+F"
+
+// shortcutErrPrefix opens what the settings window says when the shortcut
+// is taken.
+const shortcutErrPrefix = "全局快捷键注册失败："
+
+// applyGlobalShortcut claims or releases the panel's keys, and keeps the
+// setting and the window's message in step with what happened. Start and the
+// settings switch call it; a test replaces registerShortcut and
+// unregisterShortcut to see each call.
+func (a *App) applyGlobalShortcut(on bool) {
+	if !on {
+		a.unregisterShortcut(globalShortcutKeys)
+		a.globalShortcut = false
+		if strings.HasPrefix(a.settingsErr, shortcutErrPrefix) {
+			a.settingsErr = ""
+		}
+		return
+	}
+	if err := a.registerShortcut(globalShortcutKeys, a.TogglePanel); err != nil {
+		// The shortcut belongs to another app or to this one already. The
+		// switch goes back off, and the settings window says why.
+		a.globalShortcut = false
+		a.settingsErr = shortcutErrPrefix + err.Error()
+		return
+	}
+	a.globalShortcut = true
+	if strings.HasPrefix(a.settingsErr, shortcutErrPrefix) {
+		a.settingsErr = ""
+	}
 }
 
 func (a *App) trayTooltip() string {
@@ -954,6 +1457,15 @@ func money(v float64) string {
 	v = math.Abs(v)
 	s := fmt.Sprintf("%.2f", v)
 	whole, frac, _ := strings.Cut(s, ".")
+	s = groupDigits(whole) + "." + frac
+	if neg {
+		return "-" + s
+	}
+	return s
+}
+
+// groupDigits puts thousands separators in a whole number.
+func groupDigits(whole string) string {
 	var b strings.Builder
 	for i, r := range whole {
 		if i > 0 && (len(whole)-i)%3 == 0 {
@@ -961,10 +1473,7 @@ func money(v float64) string {
 		}
 		b.WriteRune(r)
 	}
-	if neg {
-		return "-" + b.String() + "." + frac
-	}
-	return b.String() + "." + frac
+	return b.String()
 }
 
 // signedMoney writes an amount with its sign.

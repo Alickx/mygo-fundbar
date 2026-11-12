@@ -11,15 +11,32 @@ import (
 	"github.com/egoist/mygo/ui/chart"
 )
 
-// periods are the stretches of history the chart shows.
+// periodMode is how a period's start is found: a fixed number of days back
+// from the newest value, the turn of its year, or the fund's own first value.
+type periodMode int
+
+const (
+	periodDays periodMode = iota
+	periodYearToDate
+	periodAll
+)
+
+// periods are the stretches of history the chart shows, in the order the
+// control lists them. The order is saved as an index, so new periods are
+// appended rather than put beside their length.
 var periods = []struct {
 	label string
+	short string
 	days  int
+	mode  periodMode
 }{
-	{"近1月", 30},
-	{"近3月", 92},
-	{"近6月", 183},
-	{"近1年", 365},
+	{"近1月", "1月", 30, periodDays},
+	{"近3月", "3月", 92, periodDays},
+	{"近6月", "6月", 183, periodDays},
+	{"近1年", "1年", 365, periodDays},
+	{"今年来", "今年", 0, periodYearToDate},
+	{"近3年", "3年", 1095, periodDays},
+	{"成立以来", "全部", 0, periodAll},
 }
 
 // periodStart is when the chosen period opens. A fund younger than the
@@ -33,6 +50,22 @@ func periodStart(f *Fund, period int) time.Time {
 		period = 0
 	}
 	last := parseDay(f.Navs[len(f.Navs)-1].Date)
+	switch periods[period].mode {
+	case periodAll:
+		return parseDay(f.Navs[0].Date)
+	case periodYearToDate:
+		// Open at the last value before January 1, so that the first day's
+		// move is part of the year rather than its base.
+		jan1 := time.Date(last.Year(), 1, 1, 0, 0, 0, 0, cst)
+		for i := len(f.Navs) - 1; i >= 0; i-- {
+			if at := parseDay(f.Navs[i].Date); at.Before(jan1) {
+				return at
+			}
+		}
+		// A fund that started this year has no year-end value to open at, so
+		// its whole history is all there is.
+		return parseDay(f.Navs[0].Date)
+	}
 	return last.AddDate(0, 0, -periods[period].days)
 }
 
@@ -85,12 +118,25 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	if partial {
 		label = "成立以来"
 	}
-	change := 0.0
-	if len(navs) > 1 && navs[0].Unit > 0 {
-		change = (navs[len(navs)-1].Unit/navs[0].Unit - 1) * 100
-	}
+	change := model.PeriodChange(navs)
+	distribution := model.HasDistribution(navs)
 	if a.pick >= len(navs) {
 		a.pick = -1
+	}
+	// The chosen fund and the removed ones leave the comparison before the
+	// legend and the plot read it.
+	a.pruneCompare(f.Code)
+	comparing := a.navView == 0 && len(a.compare) > 0 && len(navs) > 0
+	var lines []compareLine
+	if comparing {
+		funds := []*Fund{f}
+		for _, code := range a.compare {
+			if g := a.byCode(code); g != nil {
+				funds = append(funds, g)
+			}
+		}
+		lines = compareSeries(parseDay(navs[0].Date),
+			parseDay(navs[len(navs)-1].Date), funds)
 	}
 
 	card(c, t).Gap(8).Children(func() {
@@ -108,17 +154,26 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 					a.pick = -1
 					a.save()
 				})
-			ui.Segmented(c, &a.period, "近1月", "近3月", "近6月", "近1年").Shrink(0).
-				OnChange(func() { a.pick = -1 })
+			a.periodControl(c, t)
 		})
-		ui.Row(c).Height(18).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Height(18).AlignItems(ui.Center).Gap(8).Children(func() {
 			if len(navs) == 0 {
+				return
+			}
+			if comparing {
+				// The legend replaces the single line: each fund's change over
+				// the same window, in its line's color.
+				a.compareLegend(c, t, lines)
+				a.compareButton(c, t)
 				return
 			}
 			info := label + "净值变化 " + pct(change)
 			color := up(t, change)
 			if partial && len(navs) > 1 {
 				info += " · 净值自 " + navs[0].Date + " 起"
+			}
+			if distribution && a.navView == 0 && a.pick < 0 {
+				info += " · 前复权"
 			}
 			if len(navs) == 1 {
 				info = "只有 " + navs[0].Date + " 一个净值日"
@@ -135,14 +190,32 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 				color = up(t, n.Pct)
 			}
 			// The tooltip carries the whole story, including why a period
-			// longer than the fund's history shows what it shows.
+			// longer than the fund's history shows what it shows, and why
+			// the line differs from the published unit values.
 			tip := info
-			if partial && len(navs) > 1 && a.navView == 0 && a.pick < 0 {
-				tip = fmt.Sprintf("该基金净值自 %s 起，只有 %d 个交易日，填不满%s，图上显示的是全部历史",
-					navs[0].Date, len(navs), periods[a.period].label)
+			if a.navView == 0 && a.pick < 0 {
+				switch {
+				case distribution && partial && len(navs) > 1:
+					tip = fmt.Sprintf("区间内有分红或拆分，走势图按前复权净值绘制，涨跌按当日公布涨跌幅计算；该基金净值自 %s 起，只有 %d 个交易日，填不满%s，图上显示的是全部历史",
+						navs[0].Date, len(navs), periods[a.period].label)
+				case distribution:
+					tip = "区间内有分红或拆分，走势图按前复权净值绘制，涨跌按当日公布涨跌幅计算"
+				case partial && len(navs) > 1:
+					tip = fmt.Sprintf("该基金净值自 %s 起，只有 %d 个交易日，填不满%s，图上显示的是全部历史",
+						navs[0].Date, len(navs), periods[a.period].label)
+				}
+			}
+			if a.navView == 1 && distribution {
+				// The rows below are published unit values, whose first and
+				// last do not give this figure.
+				tip = "区间内有分红或拆分，区间涨跌按当日公布涨跌幅计算，与首尾单位净值之比不同"
 			}
 			ui.Text(c, info).FontSize(11.5).
-				TextColor(color).FontFeatures("tnum").SingleLine().Ellipsis("…").Tooltip(tip)
+				TextColor(color).FontFeatures("tnum").SingleLine().Ellipsis("…").
+				Grow(1).Basis(0).MinWidth(0).Tooltip(tip)
+			// The comparison is chosen here even while the list view shows,
+			// and takes the plot's shape when the line view comes back.
+			a.compareButton(c, t)
 		})
 		if a.navView == 1 {
 			a.navTable(c, t, navs)
@@ -154,8 +227,115 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			})
 			return
 		}
-		a.plot(c, t, navs, axisFrom, up(t, change))
+		if comparing {
+			a.comparePlot(c, t, lines, navs, axisFrom)
+		} else {
+			a.plot(c, t, navs, axisFrom, up(t, change))
+		}
+		a.riskRow(c, t, navs)
 	})
+}
+
+// riskRow is the shown window's risk and return in one compact line: how far
+// it fell from its peak, how much it moved day to day, and what that amounts
+// to over a year. Each measure keeps its definition in a tooltip, because a
+// small line has no room for the caveats.
+func (a *App) riskRow(c *ui.Context, t *ui.Theme, navs []model.Nav) {
+	if len(navs) < 2 {
+		return
+	}
+	drawdown, peak, low := model.MaxDrawdown(navs)
+	volatility, returns := model.AnnualizedVolatility(navs)
+	annual, days := model.AnnualizedReturn(navs)
+
+	type stat struct {
+		label, value, tip string
+		color             ui.Color
+	}
+	stats := []stat{{
+		label: "最大回撤", value: fmt.Sprintf("%.2f%%", drawdown),
+		color: t.Text,
+		tip:   "按前复权净值计算",
+	}}
+	if peak != "" && drawdown < 0 {
+		stats[0].tip = fmt.Sprintf("按前复权净值计算：从 %s 的高点回落到 %s 的低点，回撤 %.2f%%",
+			peak, low, -drawdown)
+	}
+	if returns >= 20 {
+		stats = append(stats, stat{
+			label: "年化波动", value: fmt.Sprintf("%.2f%%", volatility),
+			color: t.Text,
+			tip:   "区间内每日涨跌的样本标准差（n−1）× √250，按前复权净值计算；少于 20 个交易日不显示",
+		})
+	}
+	if days >= 365 {
+		stats = append(stats, stat{
+			label: "年化收益", value: pct(annual), color: up(t, annual),
+			tip: "区间涨跌按 365 天折算成一年的收益率，区间须满 365 个自然日",
+		})
+	}
+	ui.Row(c).Gap(18).Wrap().Children(func() {
+		for _, s := range stats {
+			ui.Column(c).Shrink(0).Gap(1).Children(func() {
+				ui.Text(c, s.label).FontSize(10.5).TextColor(t.TextMuted).NoWrap()
+				ui.Text(c, s.value).FontSize(12.5).FontWeight(600).
+					TextColor(s.color).FontFeatures("tnum").NoWrap().
+					Tooltip(s.tip)
+			})
+		}
+	})
+}
+
+// periodControl chooses the chart's window. Seven entries do not fit across
+// the card at the window's minimum, so the four common periods stay segments
+// and the three longest wait in a ⋯ menu: nothing is squeezed to fit, and
+// the menu keeps the chosen period's name visible on its trigger.
+func (a *App) periodControl(c *ui.Context, t *ui.Theme) {
+	const direct = 4
+	// The segments are drawn by hand rather than with ui.Segmented, which
+	// has no segment to choose when a menu period is active and would mark
+	// one of the four as if it were.
+	ui.Row(c).Shrink(0).AlignItems(ui.Stretch).
+		Padding(t.Space(0.5)).Gap(t.Space(0.5)).
+		Radius(t.Radius).Background(t.Surface).Border(1, t.Border).Children(func() {
+		for i := 0; i < direct; i++ {
+			period := i
+			b := ui.ButtonBase(c).
+				Padding(t.Space(1), t.Space(3)).
+				Radius(max(t.Radius-t.Space(0.5), 0)).Shrink(0)
+			switch {
+			case a.period == period:
+				face := t.SurfacePressed
+				if !t.Dark {
+					face = t.Background
+				}
+				b.Background(face).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.12))
+			case b.Hovered():
+				b.Background(t.SurfaceHover)
+			}
+			b.Children(func() { ui.Text(c, periods[period].short).SingleLine() })
+			if b.Clicked() {
+				a.period = period
+				a.pick = -1
+				a.save()
+			}
+		}
+	})
+	label := "⋯"
+	if a.period >= direct {
+		label = periods[a.period].short
+	}
+	ui.PopoverMenuButton(c, label, func(m *ui.Menu) {
+		for i := direct; i < len(periods); i++ {
+			p := i
+			item := m.Item(periods[p].label).Radio(a.period == p)
+			if item.Chosen() {
+				a.period = p
+				a.pick = -1
+				a.save()
+			}
+		}
+	}).Shrink(0).Tooltip("更多周期：今年来、近3年、成立以来")
 }
 
 // navTable lists each trading day's published value, newest first.
@@ -227,12 +407,16 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, axisFrom time.T
 		return
 	}
 
+	// The line is back-adjusted, so that a dividend or split reads as the
+	// return it was rather than as a step down; the readout below still
+	// names each day's published value.
+	adj := model.Adjusted(navs)
 	xs := make([]float32, n)
-	lo, hi := navs[0].Unit, navs[0].Unit
+	lo, hi := adj[0], adj[0]
 	for i, nav := range navs {
 		xs[i] = float32(float64(parseDay(nav.Date).Sub(t0)) / float64(span))
-		lo = math.Min(lo, nav.Unit)
-		hi = math.Max(hi, nav.Unit)
+		lo = math.Min(lo, adj[i])
+		hi = math.Max(hi, adj[i])
 	}
 	if hi-lo < 0.0001 {
 		hi += 0.005
@@ -243,17 +427,11 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, navs []model.Nav, axisFrom time.T
 	ticks := y.Ticks(4)
 	// The plot takes fractions of its height, as the scale gives them.
 	ys := make([]float32, n)
-	for i, nav := range navs {
-		ys[i] = y.At(nav.Unit)
+	for i := range navs {
+		ys[i] = y.At(adj[i])
 	}
 	xt := chart.NewTime(t0, t1)
-	// The months read as the rest of the window does.
-	xt.Format = func(at time.Time) string {
-		if at.Day() == 1 {
-			return fmt.Sprintf("%d月", int(at.Month()))
-		}
-		return fmt.Sprintf("%d月%d日", int(at.Month()), at.Day())
-	}
+	xt.Format = timeAxisFormat(t0, t1)
 	label := func(_ chart.Side, tick chart.Tick) {
 		ui.Text(c, tick.Label).NoWrap().FontSize(10.5).TextColor(t.TextMuted).
 			FontFeatures("tnum")

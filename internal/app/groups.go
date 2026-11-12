@@ -100,6 +100,9 @@ func (a *App) SelectGroup(id string) {
 		return
 	}
 	a.syncSelection()
+	// Another group lists other funds: the look-through of the old one has
+	// nothing to do with what the new one shows.
+	a.exitPortfolio()
 	a.group = id
 	a.rebuildList()
 	a.cancelGroupEdit()
@@ -200,11 +203,14 @@ func (a *App) DeleteGroup(id string) {
 		f.Groups = kept
 		if len(kept) == 0 {
 			store.DropSnapshot(a.dir, f.Code)
+			// As Remove does: the rows are set aside, not deleted.
+			store.ShelveLedger(a.dir, f.Code)
 			continue
 		}
 		all = append(all, f)
 	}
 	a.all = all
+	a.pruneEstimates()
 	delete(a.selCode, id)
 	if a.group == id {
 		a.group = holdingGroup
@@ -229,6 +235,19 @@ func dropFund(funds []*Fund, f *Fund) []*Fund {
 // applyPending does what a menu asked for, before the frame that shows the
 // outcome is built.
 func (a *App) applyPending() {
+	// A click on a list row while the look-through showed says which fund to
+	// show on the way out: the list chose a scratch row rather than the fund
+	// the pane had been showing.
+	if a.portfolio && a.listSel >= 0 {
+		i := a.listSel
+		a.listSel = -1
+		a.showFundRow(i)
+	}
+	// A group without shares, or another group altogether, has no portfolio
+	// to look through.
+	if a.portfolio && !a.portfolioAvailable() {
+		a.exitPortfolio()
+	}
 	if a.pendingRemove >= 0 {
 		i := a.pendingRemove
 		a.pendingRemove = -1
@@ -263,6 +282,27 @@ func (a *App) applyPending() {
 		a.wantGroup, a.wantGroupSet = "", false
 		a.SelectGroup(id)
 	}
+	if a.wantTxEdit.code != "" {
+		ref := a.wantTxEdit
+		a.wantTxEdit = txRef{}
+		if f := a.byCode(ref.code); f != nil {
+			a.beginEditTxn(f, ref.id)
+		}
+	}
+	if a.wantTxDelete.code != "" {
+		ref := a.wantTxDelete
+		a.wantTxDelete = txRef{}
+		if f := a.byCode(ref.code); f != nil {
+			a.deleteTxn(f, ref.id)
+		}
+	}
+	if a.wantManual != "" {
+		code := a.wantManual
+		a.wantManual = ""
+		if f := a.byCode(code); f != nil {
+			a.toManual(f)
+		}
+	}
 }
 
 // JoinGroup lists the fund at i in a group it is not in yet.
@@ -284,6 +324,9 @@ func (a *App) pickFund(code string) {
 	if f == nil {
 		return
 	}
+	// A fund asked for from the menu bar is a fund's detail, not the
+	// portfolio overview.
+	a.exitPortfolio()
 	if !f.In(a.group) {
 		next := f.Groups[0]
 		for _, g := range f.Groups {

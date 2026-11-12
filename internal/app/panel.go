@@ -1,14 +1,26 @@
 package app
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"fundbar/internal/model"
 )
 
 // panelRows is how many funds the preview lists; the rest wait in the
 // window, as the preview stays small.
 const panelRows = 8
+
+// panelIndexSize is the text size of the benchmarks row, panelIndexGap the
+// space between its parts, and panelIndicesHeight what the row adds to the
+// flyout before it measures itself: the line and the gap above it.
+const (
+	panelIndexSize     = 10.5
+	panelIndexGap      = 4
+	panelIndicesHeight = 24
+)
 
 // panelRadius is how round the preview's corners are, close to the
 // system's popover, which rounds the material behind them.
@@ -212,6 +224,60 @@ func (a *App) panelHead(c *ui.Context, t *ui.Theme) {
 				TextColor(t.TextMuted).FontFeatures("tnum").NoWrap()
 		}
 	})
+	a.panelIndices(c, t)
+}
+
+// panelIndices draws the benchmarks under the day's summary, when the last
+// refresh read them and the setting shows them. The three names, prices and
+// changes do not fit across 320 DIP, so the row drops the prices rather than
+// wrap; a wider panel keeps them.
+func (a *App) panelIndices(c *ui.Context, t *ui.Theme) {
+	if !a.showIndices || len(a.indices) == 0 {
+		return
+	}
+	avail := float32(0)
+	if w, _ := c.Size(); w > 0 {
+		avail = w - 24 // the panel box pads 12 DIP on each side
+	}
+	withPrices := indexRowWidth(c, a.indices, true) <= avail
+	r := ui.Row(c).AlignItems(ui.Baseline).Gap(panelIndexGap)
+	r.Children(func() {
+		for i, q := range a.indices {
+			if i > 0 {
+				ui.Text(c, "·").FontSize(panelIndexSize).
+					TextColor(t.TextMuted).NoWrap().Shrink(0)
+			}
+			ui.Text(c, indexLabel(q.Symbol)).FontSize(panelIndexSize).
+				TextColor(t.TextMuted).NoWrap().Shrink(0)
+			if withPrices {
+				ui.Textf(c, "%.2f", q.Price).FontSize(panelIndexSize).
+					FontFeatures("tnum").NoWrap().Shrink(0)
+			}
+			ui.Text(c, pct(q.Pct)).FontSize(panelIndexSize).
+				TextColor(up(t, q.Pct)).FontFeatures("tnum").NoWrap().Shrink(0)
+		}
+	})
+}
+
+// indexRowWidth is how wide the benchmarks row takes with or without the
+// prices, so the row can tell whether they fit before it draws them.
+func indexRowWidth(c *ui.Context, quotes []model.Quote, prices bool) float32 {
+	measure := func(s string) float32 {
+		w, _ := c.MeasureText(0, ui.Span{Text: s, Size: panelIndexSize})
+		return w
+	}
+	var w float32
+	for i, q := range quotes {
+		if i > 0 {
+			w += panelIndexGap + measure("·") + panelIndexGap
+		}
+		w += measure(indexLabel(q.Symbol))
+		if prices {
+			w += panelIndexGap + measure(fmt.Sprintf("%.2f", q.Price))
+		}
+		w += panelIndexGap + measure(pct(q.Pct))
+	}
+	return w
 }
 
 // panelRow is one fund of the preview: the day's change, and a click that
@@ -248,6 +314,9 @@ func (a *App) panelRow(c *ui.Context, t *ui.Theme, f *Fund) {
 			sub := f.Code
 			if f.Err != "" {
 				sub += " · 读取失败"
+			}
+			if f.UsingEstimate() && f.Est.Cover < minCover {
+				sub += fmt.Sprintf(" · 覆盖 %.1f%%", f.Est.Cover)
 			}
 			ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).
 				SingleLine().Ellipsis("…")

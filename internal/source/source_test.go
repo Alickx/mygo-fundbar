@@ -95,6 +95,25 @@ var stockCodesNew =["1.600519","116.00883"];`
 	}
 }
 
+// A real answer line of an index, GBK-decoded, as the quote endpoint sends
+// it: the same field layout the stocks use.
+const indexQuote = `v_sh000001="1~上证指数~000001~3680.64~3663.72~3655.66~433120083~0~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~~20261111161427~16.92~0.46~3689.65~3650.31~3680.64/433120083/736154792000~433120083~73615479~0.89~16.70~~3689.65~3650.31~1.07~578335.90~646127.31~0.00~-1~-1~0.87~0~36";`
+
+func TestParseIndexQuote(t *testing.T) {
+	out := map[string]model.Quote{}
+	parseQuotes(indexQuote, out)
+	q, ok := out["sh000001"]
+	if !ok {
+		t.Fatalf("parsed %+v, want sh000001", out)
+	}
+	if q.Price != 3680.64 || q.Pct != 0.46 {
+		t.Fatalf("quote = %+v, want 3680.64 and +0.46%%", q)
+	}
+	if got := q.At.Format("2006-01-02 15:04:05"); got != "2026-11-11 16:14:27" {
+		t.Fatalf("quote time = %q", got)
+	}
+}
+
 func TestParseQuoteTime(t *testing.T) {
 	cn := parseQuoteTime("20261109161440")
 	if cn.IsZero() || cn.Hour() != 16 || cn.Day() != 9 {
@@ -160,6 +179,12 @@ func TestNavDue(t *testing.T) {
 		// The weekend: Friday's value.
 		{time.Date(2026, 11, 14, 12, 0, 0, 0, cst), "2026-11-13"},
 		{time.Date(2026, 11, 15, 12, 0, 0, 0, cst), "2026-11-13"},
+		// The first day after the National Day holiday, in the morning: the
+		// value from before the holiday.
+		{time.Date(2026, 10, 8, 10, 0, 0, 0, cst), "2026-09-30"},
+		// A holiday evening: nothing is published, so the value before the
+		// holiday stays the newest.
+		{time.Date(2026, 10, 5, 21, 0, 0, 0, cst), "2026-09-30"},
 	}
 	for _, c := range cases {
 		if got := navDue(c.at); got != c.want {

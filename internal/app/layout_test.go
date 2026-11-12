@@ -6,6 +6,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+
+	"fundbar/internal/model"
 )
 
 // Exercise the window's actual layout and input, including a restored wide
@@ -24,7 +26,7 @@ func TestControlsSurviveWindowAndSidebarResize(t *testing.T) {
 
 			check := func() {
 				t.Helper()
-				for _, text := range []string{"刷新", "涨跌分布", "净值走势", "近1月", "近1年", "编辑持仓"} {
+				for _, text := range []string{"刷新", "涨跌分布", "净值走势", "1月", "1年", "编辑持仓"} {
 					r := requireBox(t, tt, text)
 					if r.X < a.sidebarWidth || r.X+r.W > 900 || r.Y < 0 || r.Y+r.H > 600 {
 						t.Errorf("%s is clipped: %+v", text, r)
@@ -43,7 +45,7 @@ func TestControlsSurviveWindowAndSidebarResize(t *testing.T) {
 			tt.Release(700, 300)
 			tt.Frame()
 			check()
-			if err := tt.Click("近1年"); err != nil {
+			if err := tt.Click("1年"); err != nil {
 				t.Fatal(err)
 			}
 			if a.period != 3 {
@@ -85,6 +87,88 @@ func TestMissingNavDoesNotClaimPublishedValue(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("等待净值") || tt.HasText("已公布净值") {
 		t.Fatal("missing data must not look like a published NAV")
+	}
+}
+
+func TestSevenPeriodsFitAtTheSmallestWindow(t *testing.T) {
+	a := preview(t)
+	// The default sidebar leaves the card about 550 DIP at the 900 DIP
+	// minimum: the four common periods are segments, the rest a menu.
+	a.sidebarWidth = 348
+	tt := ui.NewTester(a.View, 900, 600)
+	tt.Frame()
+	for _, label := range []string{"1月", "3月", "6月", "1年", "⋯"} {
+		r := requireBox(t, tt, label)
+		if r.X < a.sidebarWidth || r.X+r.W > 900 || r.Y < 0 || r.Y+r.H > 600 {
+			t.Errorf("period %q is clipped: %+v", label, r)
+		}
+	}
+	if err := tt.Click("1年"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.period != 3 {
+		t.Fatalf("chose 1年 and got period %d, want 3", a.period)
+	}
+
+	// The three longest periods live in the more menu, still named in full.
+	if err := tt.Click("⋯"); err != nil {
+		t.Fatal(err)
+	}
+	menu := tt.Menu()
+	for _, label := range []string{"今年来", "近3年", "成立以来"} {
+		found := false
+		for _, m := range menu {
+			if m == label {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("menu %v is missing %q", menu, label)
+		}
+	}
+	if err := tt.ChooseMenuItem("成立以来"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.period != 6 {
+		t.Fatalf("chose 成立以来 and got period %d, want 6", a.period)
+	}
+	if !tt.HasText("成立以来净值变化") {
+		t.Fatalf("the info line does not name the chosen period: %v", tt.Texts())
+	}
+}
+
+func TestRiskRowFollowsTheWindow(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	f.Industries = nil
+	start := time.Date(2025, 11, 11, 0, 0, 0, 0, cst)
+	f.Navs = nil
+	for i := 0; i <= 24; i++ {
+		unit := 1 + float64(i)*0.004
+		if i > 12 {
+			unit = 1.05 - float64(i-12)*0.01
+		}
+		f.Navs = append(f.Navs, model.Nav{
+			Date: start.AddDate(0, 0, i*16).Format("2006-01-02"),
+			Unit: unit,
+		})
+	}
+	a.period = 6 // 成立以来: 24 returns and more than a year
+	tt := ui.NewTester(a.View, 1080, 1200)
+	tt.Frame()
+	for _, label := range []string{"最大回撤", "年化波动", "年化收益"} {
+		if !tt.HasText(label) {
+			t.Fatalf("missing %q, got %v", label, tt.Texts())
+		}
+	}
+
+	// A short window has a drawdown but not enough days for the other two.
+	a.period = 0
+	tt.Frame()
+	if !tt.HasText("最大回撤") || tt.HasText("年化波动") || tt.HasText("年化收益") {
+		t.Fatalf("short window metrics = %v", tt.Texts())
 	}
 }
 
