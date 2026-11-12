@@ -416,6 +416,11 @@ type App struct {
 	upd      updateState
 	up       *mygo.Update
 	watching bool
+	// checkedAt is when the app last finished asking for a newer version,
+	// and checking says one is in flight. They change on the main thread
+	// only.
+	checkedAt time.Time
+	checking  bool
 	// flash is a line the status row shows for a while, such as the answer
 	// to a check the user asked for, and flashUntil when it goes.
 	flash      string

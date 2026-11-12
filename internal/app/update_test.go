@@ -2,6 +2,7 @@ package app
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -71,6 +72,48 @@ func TestUpdateCheckRespectsIgnoredAndReady(t *testing.T) {
 	a.foundUpdate(false, up, nil)
 	if a.upd.step != updateReady {
 		t.Error("a check dropped the version that waits for a restart")
+	}
+}
+
+// The app looks for a newer version on its own schedule: checkEvery after
+// the last check that finished, and not on one long sleep, which macOS
+// pauses while the Mac sleeps.
+func TestUpdateDue(t *testing.T) {
+	a := preview(t)
+	if !a.updateDue(checkEvery) {
+		t.Error("no check is due before the first one")
+	}
+
+	a.foundUpdate(false, nil, nil) // up to date, so nothing to show
+	if a.checkedAt.IsZero() {
+		t.Error("a check that finished did not say when")
+	}
+	if a.updateDue(checkEvery) {
+		t.Error("another check is due right after one")
+	}
+
+	a.checkedAt = now().Add(-checkEvery - time.Second)
+	if !a.updateDue(checkEvery) {
+		t.Error("the check that checkEvery passed did not come due")
+	}
+	if a.updateDue(activationEvery) {
+		t.Error("a check the window asks for came due sooner than its gap")
+	}
+
+	// One at a time: the answer on its way is what the app waits for.
+	a.checking = true
+	if a.updateDue(0) {
+		t.Error("a second check started while one was running")
+	}
+	a.checking = false
+
+	// A download in hand is newer than any manifest the app could read.
+	for _, step := range []updateStep{updateFetching, updateReady} {
+		a.checkedAt = time.Time{}
+		a.upd = updateState{step: step}
+		if a.updateDue(checkEvery) {
+			t.Errorf("a check started while step %d was in hand", step)
+		}
 	}
 }
 

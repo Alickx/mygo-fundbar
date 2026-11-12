@@ -81,6 +81,11 @@ func main() {
 
 		a.Attach(win, tray)
 
+		// Coming back to the app, through its window or by activating it, is
+		// when a newer version is worth a look.
+		mygo.App.OnDidBecomeActive(a.CheckUpdateOnActivate)
+		win.OnShow(a.CheckUpdateOnActivate)
+
 		quitting := false
 		mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { quitting = true })
 		win.OnClose(func(e *mygo.CloseEvent) {

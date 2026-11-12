@@ -62,25 +62,74 @@ func (u updateState) status() string {
 }
 
 // firstCheck is how long after launch the app looks for a newer version,
-// and checkEvery how often it looks again: as Sparkle does.
+// checkEvery how often it looks again while it runs, and activationEvery the
+// shortest gap between the checks that bringing the app forward asks for.
 const (
-	firstCheck = 10 * time.Second
-	checkEvery = 24 * time.Hour
+	firstCheck      = 10 * time.Second
+	checkEvery      = 5 * time.Minute
+	activationEvery = time.Hour
 )
 
-// watchUpdates looks for a newer version after launch, and then daily.
+// watchTick is how often the app asks the clock whether checkEvery has
+// passed, rather than sleeping checkEvery in one go: macOS stops the
+// monotonic clock while it sleeps, and a timer on it wakes hours late after
+// a night's sleep. The wall clock keeps counting, so each tick reads it.
+const watchTick = 10 * time.Second
+
+// watchUpdates looks for a newer version a moment after launch, and then
+// every checkEvery for as long as the app runs.
 func (a *App) watchUpdates() {
 	if a.watching || !mygo.Updater.Enabled() {
 		return
 	}
 	a.watching = true
 	go func() {
-		for wait := firstCheck; ; wait = checkEvery {
-			time.Sleep(wait)
-			a.checkUpdates(false)
+		time.Sleep(firstCheck)
+		for {
+			a.checkWhenDue(checkEvery)
+			time.Sleep(watchTick)
 		}
 	}()
 }
+
+// CheckUpdateOnActivate looks for a newer version because the user brought
+// the window, or the app, forward: at most once activationEvery.
+func (a *App) CheckUpdateOnActivate() {
+	if !mygo.Updater.Enabled() {
+		return // a build that cannot update itself only says so when asked.
+	}
+	a.checkWhenDue(activationEvery)
+}
+
+// checkWhenDue looks for a newer version if the last check is gap old. It
+// reads the state on the main thread, where it lives.
+func (a *App) checkWhenDue(gap time.Duration) {
+	a.onMain(func() {
+		if a.updateDue(gap) {
+			a.checkUpdates(false)
+		}
+	})
+}
+
+// updateDue reports whether a check may start now: not while one runs or a
+// download waits for a restart, and not before gap passed since the last
+// check that finished.
+func (a *App) updateDue(gap time.Duration) bool {
+	if a.checking {
+		return false // one at a time
+	}
+	switch a.upd.step {
+	case updateFetching, updateReady:
+		return false // a newer answer is no use beside the download in hand
+	}
+	return a.checkedAt.IsZero() || since(a.checkedAt) >= gap
+}
+
+// since reports how long ago t was, by the wall clock. time.Time itself
+// measures with the monotonic clock where it can, and that clock stops
+// while macOS sleeps: a Mac that slept the night would read its morning as
+// the evening before, and wait another day for the check it owed.
+func since(t time.Time) time.Duration { return time.Since(t.Round(0)) }
 
 // CheckUpdate looks for a newer version because the user asked, and says
 // what it found in the status row when there is nothing to offer.
@@ -89,22 +138,31 @@ func (a *App) CheckUpdate() {
 		a.Flash("这个版本不能自行更新：请到 GitHub 下载新版本")
 		return
 	}
-	go a.checkUpdates(true)
+	a.onMain(func() {
+		if a.checking {
+			return // the answer on its way is the one to show.
+		}
+		a.checkUpdates(true)
+	})
 }
 
 // checkUpdates asks for the manifest, off the main thread, and hands what
-// it found to the window.
+// it found to the window. It is called on the main thread.
 func (a *App) checkUpdates(user bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	up, err := mygo.Updater.Check(ctx)
-	a.onMain(func() { a.foundUpdate(user, up, err) })
+	a.checking = true
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		up, err := mygo.Updater.Check(ctx)
+		a.onMain(func() { a.foundUpdate(user, up, err) })
+	}()
 }
 
 // foundUpdate takes the outcome of a check. A check the user asked for says
 // what it found; one in the background stays quiet about a failure, and
 // about a version the user ignored.
 func (a *App) foundUpdate(user bool, up *mygo.Update, err error) {
+	a.checking, a.checkedAt = false, now()
 	if a.upd.step == updateReady {
 		return // a version waits for a restart: keep it.
 	}
