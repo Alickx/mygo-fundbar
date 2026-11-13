@@ -77,6 +77,26 @@ func TestParseHoldings(t *testing.T) {
 	}
 }
 
+// A slice of a fund's manager page, as the fund site sends it.
+const managersHTML = `<h4 class="t"><label class="left">基金经理变动一览</label></h4>
+<table class="w782 comm  jloff"><thead><tr><th class="first">起始期</th><th>截止期</th><th>基金经理</th><th>任职期间</th><th>任职回报</th></tr></thead><tbody><tr><td>2025-04-12</td><td>至今</td><td><a href='http://fund.eastmoney.com/manager/30189741.html'>萧楠</a> </td><td>1年又215天</td><td class="tor  grn">-16.59%</td></tr><tr><td>2021-01-01</td><td>2025-04-11</td><td><a href='http://fund.eastmoney.com/manager/1.html'>张三</a> <a href='http://fund.eastmoney.com/manager/2.html'>李四</a> </td><td>4年又100天</td><td class="tor  grn">10.00%</td></tr></tbody></table>
+<table class="w782 comm"><tr><td>2010-01-01</td><td>2010-12-31</td><td>别人</td></tr></table>`
+
+func TestParseManagers(t *testing.T) {
+	got := parseManagers(managersHTML)
+	if len(got) != 2 {
+		t.Fatalf("parsed %d terms, want 2", len(got))
+	}
+	if got[0].Start != "2025-04-12" || got[0].End != "至今" ||
+		len(got[0].Names) != 1 || got[0].Names[0] != "萧楠" {
+		t.Errorf("current term = %+v", got[0])
+	}
+	if got[1].Start != "2021-01-01" || got[1].End != "2025-04-11" ||
+		len(got[1].Names) != 2 || got[1].Names[0] != "张三" || got[1].Names[1] != "李四" {
+		t.Errorf("earlier term = %+v", got[1])
+	}
+}
+
 func TestJSValues(t *testing.T) {
 	src := `var fS_name = "招商中证白酒指数(LOF)A";var fS_code = "161725";
 var Data_netWorthTrend = [{"x":1432656000000,"y":1.0,"equityReturn":0,"unitMoney":""},{"x":1794153600000,"y":0.5859,"equityReturn":-0.63,"unitMoney":""}];

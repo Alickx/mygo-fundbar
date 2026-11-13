@@ -68,6 +68,9 @@ type Data struct {
 	// NavView is what the chart card shows: 0 for the line, 1 for the list
 	// of each day's value, 2 for the recovery from the deepest fall.
 	NavView int `json:"navView,omitempty"`
+	// ManagerOnly opens the chart at the day the fund's current management
+	// team took over, rather than at the chosen period's start.
+	ManagerOnly bool `json:"managerOnly,omitempty"`
 	// SidebarWidth is how wide the user made the list of funds.
 	SidebarWidth float32 `json:"sidebarWidth,omitempty"`
 	// SkippedVersion is the newer version the user ignored: the app offers
@@ -198,6 +201,9 @@ type Snapshot struct {
 	Report   string                        `json:"report"`
 	Quotes   map[string]model.Quote        `json:"quotes,omitempty"`
 	Profiles map[string]model.StockProfile `json:"profiles,omitempty"`
+	// ManagersAt is when the management history was last read. Its zero
+	// value means a cache from before the history was kept.
+	ManagersAt time.Time `json:"managersAt,omitempty"`
 }
 
 func snapshotPath(dir, code string) string {

@@ -76,7 +76,11 @@ func windowOf(f *Fund, period int) []model.Nav {
 	if len(f.Navs) == 0 {
 		return nil
 	}
-	from := periodStart(f, period)
+	return valuesFrom(f, periodStart(f, period))
+}
+
+// valuesFrom is the fund's net asset value from a day on.
+func valuesFrom(f *Fund, from time.Time) []model.Nav {
 	var out []model.Nav
 	for _, n := range f.Navs {
 		if !parseDay(n.Date).Before(from) {
@@ -84,6 +88,23 @@ func windowOf(f *Fund, period int) []model.Nav {
 		}
 	}
 	return out
+}
+
+// chartWindow is the values the chart draws and the day its axis opens at,
+// with the window's name. A manager start, when given, replaces the chosen
+// period with the current team's own term.
+func chartWindow(f *Fund, period int, managerSince time.Time) (navs []model.Nav, from time.Time, partial bool, label string) {
+	if !managerSince.IsZero() {
+		return valuesFrom(f, managerSince), managerSince, false, "现任经理以来"
+	}
+	navs = windowOf(f, period)
+	from = periodStart(f, period)
+	partial = len(f.Navs) > 0 && parseDay(f.Navs[0].Date).After(from)
+	label = periods[period].label
+	if partial {
+		label = "成立以来"
+	}
+	return navs, from, partial, label
 }
 
 func parseDay(date string) time.Time {
@@ -167,22 +188,27 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	if a.navView < 0 || a.navView > 2 {
 		a.navView = 0
 	}
-	navs := windowOf(f, a.period)
+	// A recent manager change offers its own window, but only while the user
+	// chose it: the filter stays set as the chosen fund changes, and a fund
+	// without the change keeps its period.
+	managerSince, managerNames, managerMode := f.managerChange(now())
+	managerMode = managerMode && a.managerOnly
+	if !managerMode {
+		managerSince, managerNames = time.Time{}, nil
+	}
+	navs, from, partial, label := chartWindow(f, a.period, managerSince)
 	// A young fund has less history than the period asks for, so the longer
 	// periods show the same days. Cast the span as the fund's whole history,
 	// and keep the wider window in the plot, so it reads as a new fund rather
 	// than a chart that did not change.
-	from := periodStart(f, a.period)
-	partial := len(f.Navs) > 0 && parseDay(f.Navs[0].Date).After(from)
+	//
 	// The plot opens at the window's start when the fund is younger than it,
-	// so the line takes only the tail of the plot.
+	// so the line takes only the tail of the plot; the manager window keeps
+	// its own first day too, even when the fund publishes its first value a
+	// day or two later.
 	axisFrom := time.Time{}
-	if partial {
+	if partial || managerMode {
 		axisFrom = from
-	}
-	label := periods[a.period].label
-	if partial {
-		label = "成立以来"
 	}
 	change := model.PeriodChange(navs)
 	distribution := model.HasDistribution(navs)
@@ -227,7 +253,7 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 					a.pick = -1
 					a.save()
 				})
-			a.periodControl(c, t)
+			a.periodControl(c, t, f, managerMode)
 		})
 		ui.Row(c).Height(18).AlignItems(ui.Center).Gap(8).Children(func() {
 			if len(navs) == 0 {
@@ -248,6 +274,9 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			color := up(t, change)
 			if partial && len(navs) > 1 {
 				info += " · 净值自 " + navs[0].Date + " 起"
+			}
+			if managerMode && len(navs) > 1 {
+				info += " · 自 " + managerSince.Format("2006-01-02") + " 起"
 			}
 			if distribution && a.navView == 0 && a.pick < 0 {
 				info += " · 前复权"
@@ -271,21 +300,36 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 			// the line differs from the published unit values.
 			tip := info
 			if a.navView == 0 && a.pick < 0 {
-				switch {
-				case distribution && partial && len(navs) > 1:
-					tip = fmt.Sprintf("区间内有分红或拆分，走势图按前复权净值绘制，涨跌按当日公布涨跌幅计算；该基金净值自 %s 起，只有 %d 个交易日，填不满%s，图上显示的是全部历史",
-						navs[0].Date, len(navs), periods[a.period].label)
-				case distribution:
-					tip = "区间内有分红或拆分，走势图按前复权净值绘制，涨跌按当日公布涨跌幅计算"
-				case partial && len(navs) > 1:
-					tip = fmt.Sprintf("该基金净值自 %s 起，只有 %d 个交易日，填不满%s，图上显示的是全部历史",
-						navs[0].Date, len(navs), periods[a.period].label)
+				if managerMode {
+					tip = managerTip(managerNames, managerSince)
+					if distribution {
+						tip += "；区间内有分红或拆分，走势图按前复权净值绘制，涨跌按当日公布涨跌幅计算"
+					}
+				} else {
+					switch {
+					case distribution && partial && len(navs) > 1:
+						tip = fmt.Sprintf("区间内有分红或拆分，走势图按前复权净值绘制，涨跌按当日公布涨跌幅计算；该基金净值自 %s 起，只有 %d 个交易日，填不满%s，图上显示的是全部历史",
+							navs[0].Date, len(navs), periods[a.period].label)
+					case distribution:
+						tip = "区间内有分红或拆分，走势图按前复权净值绘制，涨跌按当日公布涨跌幅计算"
+					case partial && len(navs) > 1:
+						tip = fmt.Sprintf("该基金净值自 %s 起，只有 %d 个交易日，填不满%s，图上显示的是全部历史",
+							navs[0].Date, len(navs), periods[a.period].label)
+					}
 				}
 			}
-			if a.navView == 1 && distribution {
-				// The rows below are published unit values, whose first and
-				// last do not give this figure.
-				tip = "区间内有分红或拆分，区间涨跌按当日公布涨跌幅计算，与首尾单位净值之比不同"
+			if a.navView == 1 {
+				switch {
+				case managerMode && a.pick < 0:
+					tip = managerTip(managerNames, managerSince)
+					if distribution {
+						tip += "；区间内有分红或拆分，区间涨跌按当日公布涨跌幅计算，与首尾单位净值之比不同"
+					}
+				case distribution:
+					// The rows below are published unit values, whose first and
+					// last do not give this figure.
+					tip = "区间内有分红或拆分，区间涨跌按当日公布涨跌幅计算，与首尾单位净值之比不同"
+				}
 			}
 			ui.Text(c, info).FontSize(11.5).
 				TextColor(color).FontFeatures("tnum").SingleLine().Ellipsis("…").
@@ -695,22 +739,24 @@ func (a *App) recoveryPlot(c *ui.Context, t *ui.Theme, navs []model.Nav, rec mod
 // periodControl chooses the chart's window. Seven entries do not fit across
 // the card at the window's minimum, so the four common periods stay segments
 // and the three longest wait in a ⋯ menu: nothing is squeezed to fit, and
-// the menu keeps the chosen period's name visible on its trigger.
-func (a *App) periodControl(c *ui.Context, t *ui.Theme) {
+// the menu keeps the chosen period's name visible on its trigger. A fund
+// whose manager changed recently offers that team's own window there too.
+func (a *App) periodControl(c *ui.Context, t *ui.Theme, f *Fund, managerMode bool) {
 	const direct = 4
+	_, _, managerOK := f.managerChange(now())
 	// The segments are drawn by hand rather than with ui.Segmented, which
 	// has no segment to choose when a menu period is active and would mark
 	// one of the four as if it were.
 	ui.Row(c).Shrink(0).AlignItems(ui.Stretch).
 		Padding(t.Space(0.5)).Gap(t.Space(0.5)).
 		Radius(t.Radius).Background(t.Surface).Border(1, t.Border).Children(func() {
-		for i := 0; i < direct; i++ {
+		for i := range direct {
 			period := i
 			b := ui.ButtonBase(c).
 				Padding(t.Space(1), t.Space(3)).
 				Radius(max(t.Radius-t.Space(0.5), 0)).Shrink(0)
 			switch {
-			case a.period == period:
+			case !managerMode && a.period == period:
 				face := t.SurfacePressed
 				if !t.Dark {
 					face = t.Background
@@ -722,26 +768,49 @@ func (a *App) periodControl(c *ui.Context, t *ui.Theme) {
 			b.Children(func() { ui.Text(c, periods[period].short).SingleLine() })
 			if b.Clicked() {
 				a.period = period
+				a.managerOnly = false
 				a.pick = -1
 				a.save()
 			}
 		}
 	})
 	label := "⋯"
-	if a.period >= direct {
+	switch {
+	case managerMode:
+		label = "经理以来"
+	case a.period >= direct:
 		label = periods[a.period].short
 	}
 	ui.PopoverMenuButton(c, label, func(m *ui.Menu) {
 		for i := direct; i < len(periods); i++ {
 			p := i
-			item := m.Item(periods[p].label).Radio(a.period == p)
+			item := m.Item(periods[p].label).Radio(!managerMode && a.period == p)
 			if item.Chosen() {
 				a.period = p
+				a.managerOnly = false
 				a.pick = -1
 				a.save()
 			}
 		}
-	}).Shrink(0).Tooltip("更多周期：今年来、近3年、成立以来")
+		if managerOK {
+			m.Separator()
+			item := m.Item("现任经理管理以来").Radio(managerMode)
+			if item.Chosen() {
+				a.managerOnly = true
+				a.pick = -1
+				a.save()
+			}
+		}
+	}).Shrink(0).Tooltip(periodTip(managerOK))
+}
+
+// periodTip says what the ⋯ menu holds, and names the manager window when
+// the fund offers it.
+func periodTip(managerOK bool) string {
+	if managerOK {
+		return "更多周期：今年来、近3年、成立以来；本基金近3年更换过基金经理，可看现任经理管理以来"
+	}
+	return "更多周期：今年来、近3年、成立以来"
 }
 
 // navTable lists each trading day's published value, newest first.

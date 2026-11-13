@@ -109,3 +109,13 @@ func TestMissingAlertStateIsEmpty(t *testing.T) {
 		t.Fatalf("state = %+v, want empty", got)
 	}
 }
+
+func TestManagerOnlyIsKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "funds.json")
+	if err := (&Data{ManagerOnly: true}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if !Load(path).ManagerOnly {
+		t.Fatal("the manager window was not kept")
+	}
+}

@@ -63,6 +63,8 @@ type Fund struct {
 	Profiles       map[string]model.StockProfile
 	Industries     []model.Industry
 	IndustryReport string
+	// ManagerTerms is the fund's management in turn, newest first.
+	ManagerTerms []source.ManagerTerm
 
 	Est    model.Estimate
 	HasEst bool
@@ -293,7 +295,11 @@ type App struct {
 	// navView is what the chart card shows: the line, a list of each day's
 	// value, or the window's recovery from its deepest fall.
 	navView int
-	query   string
+	// managerOnly opens the chart at the day the current management team
+	// took over. It stays set across funds; a fund without a recent change
+	// simply keeps its period view.
+	managerOnly bool
+	query       string
 	// portfolio shows the holding group's look-through in place of a fund's
 	// detail. It is session state: neither a launch nor a new window resumes
 	// it, and nothing about it is saved. listSel is the row the list chooses
@@ -610,6 +616,7 @@ func (a *App) Load() {
 	}
 	a.period = data.Period
 	a.navView = data.NavView
+	a.managerOnly = data.ManagerOnly
 	a.sidebarWidth = data.SidebarWidth
 	a.skippedVersion = data.SkippedVersion
 	// The three settings an older file does not name fall back to what the
@@ -641,6 +648,7 @@ func (a *App) fill(f *Fund, snap *store.Snapshot) {
 	f.Report = snap.Report
 	f.Industries = snap.Fund.Industries
 	f.IndustryReport = snap.Fund.IndustryReport
+	f.ManagerTerms = snap.Fund.ManagerTerms
 	f.Profiles = snap.Profiles
 	f.Loaded = true
 	a.estimate(f, snap.Quotes)
@@ -693,8 +701,9 @@ func (a *App) save() {
 		trayText = ""
 	}
 	data := &store.Data{
-		Period: a.period, NavView: a.navView, SidebarWidth: a.sidebarWidth,
-		Groups: a.groups, ActiveGroup: a.group, Selected: a.selCode[""],
+		Period: a.period, NavView: a.navView, ManagerOnly: a.managerOnly,
+		SidebarWidth: a.sidebarWidth,
+		Groups:       a.groups, ActiveGroup: a.group, Selected: a.selCode[""],
 		SkippedVersion: a.skippedVersion,
 		TrayText:       trayText, GlobalShortcut: a.globalShortcut,
 		HideIndices: !a.showIndices, LowCoverEstimate: a.lowCoverEstimate,
@@ -929,7 +938,7 @@ func (a *App) refresh() {
 // readFund reads a fund, from the cache when it is today's.
 func (a *App) readFund(ctx context.Context, code, kind string, cached *store.Snapshot) *store.Snapshot {
 	if cached != nil && time.Since(cached.At) < 20*time.Minute && fresh(cached) &&
-		cached.Fund.IndustriesLoaded {
+		cached.Fund.IndustriesLoaded && !cached.ManagersAt.IsZero() {
 		return cached
 	}
 	fund, err := a.src.Fund(ctx, code)
@@ -938,6 +947,19 @@ func (a *App) readFund(ctx context.Context, code, kind string, cached *store.Sna
 			return cached
 		}
 		return nil
+	}
+	// The management history changes little, so a day-old copy is kept, and
+	// the cache from before it was read asks once more.
+	var managersAt time.Time
+	if cached != nil {
+		fund.ManagerTerms = cached.Fund.ManagerTerms
+		managersAt = cached.ManagersAt
+	}
+	if managersAt.IsZero() || time.Since(managersAt) >= managerRefresh {
+		if terms, err := a.src.Managers(ctx, code); err == nil {
+			fund.ManagerTerms = terms
+			managersAt = time.Now()
+		}
 	}
 	holdings, report, err := a.src.Holdings(ctx, code)
 	if err != nil && cached != nil && len(cached.Holdings) > 0 {
@@ -959,7 +981,7 @@ func (a *App) readFund(ctx context.Context, code, kind string, cached *store.Sna
 	}
 	return &store.Snapshot{
 		At: time.Now(), Fund: fund, Holdings: holdings, Report: report,
-		Profiles: cachedProfiles(cached),
+		Profiles: cachedProfiles(cached), ManagersAt: managersAt,
 	}
 }
 

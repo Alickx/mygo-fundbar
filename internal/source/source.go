@@ -60,6 +60,17 @@ type Fund struct {
 	// IndustriesLoaded tells a cache without industries from one whose
 	// report simply holds none.
 	IndustriesLoaded bool
+	// ManagerTerms is the fund's management in turn, newest first, as its
+	// manager page lists it. An empty list means the page had none to read.
+	ManagerTerms []ManagerTerm
+}
+
+// ManagerTerm is one management team's term: its first and last day, and its
+// members. A term that has not ended has "至今" for its last day.
+type ManagerTerm struct {
+	Start string
+	End   string
+	Names []string
 }
 
 func (c *Client) get(ctx context.Context, url, referer string) ([]byte, error) {
@@ -253,6 +264,17 @@ func parseNavList(body []byte, since string) []model.Nav {
 	return out
 }
 
+// Managers reads the fund's management in turn, newest first, from the page
+// of its 基金经理变动一览.
+func (c *Client) Managers(ctx context.Context, code string) ([]ManagerTerm, error) {
+	url := "https://fundf10.eastmoney.com/jjjl_" + code + ".html"
+	body, err := c.get(ctx, url, url)
+	if err != nil {
+		return nil, err
+	}
+	return parseManagers(string(body)), nil
+}
+
 // Holdings reads the stocks of a fund's latest quarterly report, from the
 // page of its 持仓.
 func (c *Client) Holdings(ctx context.Context, code string) ([]model.Holding, string, error) {
@@ -423,6 +445,98 @@ func splitConcepts(s string) []string {
 	return out
 }
 
+// parseManagers reads the rows of the 基金经理变动一览 table. Only the table
+// itself is read: the page holds other tables below it.
+func parseManagers(src string) []ManagerTerm {
+	i := strings.Index(src, "基金经理变动一览")
+	if i < 0 {
+		return nil
+	}
+	src = src[i:]
+	i = strings.Index(src, "<table")
+	if i < 0 {
+		return nil
+	}
+	src = src[i:]
+	if j := strings.Index(src, "</table>"); j >= 0 {
+		src = src[:j]
+	}
+	var out []ManagerTerm
+	for _, row := range strings.Split(src, "<tr")[1:] {
+		cells := tableCells(row)
+		if len(cells) < 3 {
+			continue
+		}
+		start := cleanDate(cells[0])
+		if start == "" {
+			continue
+		}
+		end := cleanTag(cells[1])
+		if end != "至今" {
+			if end = cleanDate(end); end == "" {
+				continue
+			}
+		}
+		names := cellNames(cells[2])
+		if len(names) == 0 {
+			continue
+		}
+		out = append(out, ManagerTerm{Start: start, End: end, Names: names})
+	}
+	return out
+}
+
+// tableCells returns the bodies of a row's cells, in order.
+func tableCells(row string) []string {
+	var cells []string
+	for _, part := range strings.Split(row, "<td")[1:] {
+		if i := strings.IndexByte(part, '>'); i >= 0 {
+			cells = append(cells, part[i+1:])
+		}
+	}
+	return cells
+}
+
+// cleanDate reads a day from a cell, and reports none when the cell does not
+// hold one.
+func cleanDate(cell string) string {
+	date := cleanTag(cell)
+	if len(date) != 10 {
+		return ""
+	}
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return ""
+	}
+	return date
+}
+
+// cellNames reads the names in a cell: one per link, or the cell's own text
+// when it has no links.
+func cellNames(cell string) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(cell, "<a")[1:] {
+		if i := strings.IndexByte(part, '>'); i >= 0 {
+			text := part[i+1:]
+			if j := strings.Index(text, "</a>"); j >= 0 {
+				text = text[:j]
+			}
+			name := cleanTag(text)
+			if name != "" && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) == 0 {
+		if name := cleanTag(cell); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// parseHoldings reads the stocks of the first holdings table on a page.
 func parseHoldings(src string) []model.Holding {
 	var out []model.Holding
 	for _, row := range strings.Split(src, "<tr") {
