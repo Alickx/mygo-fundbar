@@ -94,6 +94,10 @@ type Data struct {
 	// whose disclosed holdings are too small is not estimated, and an older
 	// file keeps that.
 	LowCoverEstimate bool `json:"lowCoverEstimate,omitempty"`
+	// HideExtremes hides the trend chart's high and low markers. Its zero
+	// value is false, which shows them, so an older file keeps the markers
+	// it has always had.
+	HideExtremes bool `json:"hideExtremes,omitempty"`
 	// Theme is the appearance the user chose: "light", "dark", or "" to
 	// follow the system. An older file names none, and follows the system as
 	// it always did.

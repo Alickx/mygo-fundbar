@@ -168,6 +168,31 @@ func buyMarks(navs []model.Nav, txns []ledger.Txn) []buyMark {
 	return marks
 }
 
+// navExtremes finds the window's highest and lowest back-adjusted values.
+// The plot marks them on the line, so they are read from the series the line
+// is drawn from; a flat window has no high or low to tell apart, and naming
+// both at the same place would only stack two labels.
+func navExtremes(adj []float64) (high, low int, ok bool) {
+	if len(adj) < 2 {
+		return 0, 0, false
+	}
+	high, low = 0, 0
+	for i := 1; i < len(adj); i++ {
+		if adj[i] > adj[high] {
+			high = i
+		}
+		if adj[i] < adj[low] {
+			low = i
+		}
+	}
+	// A hairline of noise in the back-adjusted series is still a flat window:
+	// two labels reading the same value would only overlap.
+	if adj[high]-adj[low] <= 1e-9*math.Max(1, math.Abs(adj[high])) {
+		return 0, 0, false
+	}
+	return high, low, true
+}
+
 // buyTip tells the story of a mark: what was bought, for how much, and when.
 func buyTip(m buyMark) string {
 	shares := sharesText(m.shares, 4)
@@ -355,18 +380,22 @@ func (a *App) chartCard(c *ui.Context, t *ui.Theme, f *Fund) {
 		}
 		if comparing {
 			a.comparePlot(c, t, lines, navs, axisFrom)
-		} else {
-			a.plot(c, t, f, navs, axisFrom, up(t, change))
+			a.riskRow(c, t, navs, nil)
+			return
 		}
-		a.riskRow(c, t, navs)
+		a.plot(c, t, f, navs, axisFrom, up(t, change))
+		// The trend's own switch sits at the right end of the row under the
+		// plot, where the markers it hides are drawn.
+		a.riskRow(c, t, navs, func() { a.extremesSwitch(c, t) })
 	})
 }
 
 // riskRow is the shown window's risk and return in one compact line: how far
 // it fell from its peak, how much it moved day to day, and what that amounts
 // to over a year. Each measure keeps its definition in a tooltip, because a
-// small line has no room for the caveats.
-func (a *App) riskRow(c *ui.Context, t *ui.Theme, navs []model.Nav) {
+// small line has no room for the caveats. A trailing control, when given, sits
+// at the row's right end: the trend's high and low switch.
+func (a *App) riskRow(c *ui.Context, t *ui.Theme, navs []model.Nav, trailing func()) {
 	if len(navs) < 2 {
 		return
 	}
@@ -400,14 +429,36 @@ func (a *App) riskRow(c *ui.Context, t *ui.Theme, navs []model.Nav) {
 			tip: "区间涨跌按 365 天折算成一年的收益率，区间须满 365 个自然日",
 		})
 	}
-	ui.Row(c).Gap(18).Wrap().Children(func() {
-		for _, s := range stats {
-			ui.Column(c).Shrink(0).Gap(1).Children(func() {
-				ui.Text(c, s.label).FontSize(10.5).TextColor(t.TextMuted).NoWrap()
-				ui.Text(c, s.value).FontSize(12.5).FontWeight(600).
-					TextColor(s.color).FontFeatures("tnum").NoWrap().
-					Tooltip(s.tip)
-			})
+	ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
+		// The measures take the room they need and wrap there; the trailing
+		// control keeps to the right end of the row even then.
+		ui.Row(c).Gap(18).Wrap().Grow(1).Basis(0).MinWidth(0).Children(func() {
+			for _, s := range stats {
+				ui.Column(c).Shrink(0).Gap(1).Children(func() {
+					ui.Text(c, s.label).FontSize(10.5).TextColor(t.TextMuted).NoWrap()
+					ui.Text(c, s.value).FontSize(12.5).FontWeight(600).
+						TextColor(s.color).FontFeatures("tnum").NoWrap().
+						Tooltip(s.tip)
+				})
+			}
+		})
+		if trailing != nil {
+			ui.Row(c).Shrink(0).AlignItems(ui.Center).Children(trailing)
+		}
+	})
+}
+
+// extremesSwitch shows or hides the trend's high and low markers. It is the
+// chart's own control, named plainly, and it saves the choice with the rest
+// of the window's state.
+func (a *App) extremesSwitch(c *ui.Context, t *ui.Theme) {
+	ui.Row(c).AlignItems(ui.Center).Gap(6).Shrink(0).Children(func() {
+		ui.Text(c, "净值高低点").FontSize(11).TextColor(t.TextMuted).NoWrap()
+		on := !a.hideExtremes
+		if ui.Switch(c, &on).Shrink(0).Label("净值高低点").
+			Tooltip("显示或隐藏所选区间的最高、最低净值标记").Changed() {
+			a.hideExtremes = !on
+			a.save()
 		}
 	})
 }
@@ -898,7 +949,14 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, f *Fund, navs []model.Nav, axisFr
 		hi += 0.005
 		lo -= 0.005
 	}
-	pad := (hi - lo) * 0.18
+	// The extreme labels sit above the high point and below the low one, so
+	// the plot keeps a band at each end for them: extremeBand of the plot's
+	// height holds a label clear of the line, where padding that was only a
+	// fraction of the range left them covering it. With the data spanning
+	// 1-2*extremeBand of the plot, the padding that gives each band its
+	// share is the one below.
+	const extremeBand = 0.19
+	pad := (hi - lo) * extremeBand / (1 - 2*extremeBand)
 	y := chart.NewLinear(lo-pad, hi+pad).Nice(4)
 	ticks := y.Ticks(4)
 	// The plot takes fractions of its height, as the scale gives them.
@@ -913,6 +971,17 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, f *Fund, navs []model.Nav, axisFr
 			FontFeatures("tnum")
 	}
 	marks := buyMarks(navs, f.Txns)
+	// The window's high and low ride the line itself, so the labels match the
+	// drawn value rather than the published unit. They are found before the
+	// buy tags are placed, so that a tag crowding the high label can give way
+	// to it rather than the other way round: the label always stays in its
+	// band, clear of the line.
+	hiAt, loAt, hasExtremes := navExtremes(adj)
+	hasExtremes = hasExtremes && !a.hideExtremes
+	var highX float32
+	if hasExtremes {
+		highX = xs[hiAt]
+	}
 	// A buy sits on the line as a dot, with its tag above it, in the color
 	// a rise uses. Tags that would collide with the one before keep their dot
 	// alone; the tooltip still tells the row's story.
@@ -941,6 +1010,12 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, f *Fund, navs []model.Nav, axisFr
 				x, yy := xs[m.at], ys[m.at]
 				chart.Point(c, x, yy, 10, 10).Radius(5).
 					Background(buyColor).Border(2, t.Surface).Tooltip(tip)
+				// The high label owns the band above its point: a buy tag
+				// there keeps only its dot and tooltip, so the label is never
+				// pushed down onto the line.
+				if hasExtremes && math.Abs(float64(x-highX)) < 0.12 {
+					continue
+				}
 				if lastTag >= 0 && x-lastTag < 0.12 {
 					continue
 				}
@@ -958,6 +1033,51 @@ func (a *App) plot(c *ui.Context, t *ui.Theme, f *Fund, navs []model.Nav, axisFr
 						Radius(5).Background(buyColor).Margin(0, 0, 5, 0).
 						Tooltip(tip)
 				})
+			}
+			// The reserved band above and below the data holds the extreme
+			// labels clear of the line: the high label always sits above its
+			// point, the low one always below. No flip into the plot is needed.
+			if hasExtremes {
+				extremes := []struct {
+					at    int
+					name  string
+					color ui.Color
+					above bool
+				}{
+					{hiAt, "最高", up(t, 1), true},
+					{loAt, "最低", up(t, -1), false},
+				}
+				for _, e := range extremes {
+					x, yy := xs[e.at], ys[e.at]
+					nav := navs[e.at]
+					tip := fmt.Sprintf("%s · 单位净值 %.4f", nav.Date, nav.Unit)
+					if math.Abs(adj[e.at]-nav.Unit) > 0.00005 {
+						tip += fmt.Sprintf(" · 前复权 %.4f", adj[e.at])
+					}
+					tip += " · 区间" + e.name
+					chart.Point(c, x, yy, 9, 9).Radius(4.5).
+						Background(e.color).Border(1.5, t.Surface).Tooltip(tip)
+					v, top, bottom := ui.End, float32(0), float32(5)
+					if !e.above {
+						v, top, bottom = ui.Start, 5, 0
+					}
+					// The label is wider than a buy tag, so it turns in a
+					// little earlier at the window's ends.
+					h := ui.Center
+					switch {
+					case x < 0.10:
+						h = ui.Start
+					case x > 0.90:
+						h = ui.End
+					}
+					label := e.name + " " + fmt.Sprintf("%.4f", adj[e.at])
+					chart.Anchor(c, x, yy, h, v, func() {
+						ui.Text(c, label).FontSize(10.5).FontWeight(600).NoWrap().
+							FontFeatures("tnum").TextColor(ui.RGB(255, 255, 255)).
+							Padding(2.5, 8).Radius(5).Background(e.color).
+							Margin(top, 0, bottom, 0).Tooltip(tip)
+					})
+				}
 			}
 			chart.Select(c, area, &a.pick, xs, func(i int) string {
 				nav := navs[i]

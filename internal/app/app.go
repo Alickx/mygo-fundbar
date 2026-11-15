@@ -385,6 +385,9 @@ type App struct {
 	// lowCoverEstimate shows an estimate for funds whose disclosed holdings
 	// cover less than minCover, as the settings switch asks.
 	lowCoverEstimate bool
+	// hideExtremes hides the trend chart's high and low markers, as its
+	// switch asks. Its zero value shows them, like an older file.
+	hideExtremes bool
 
 	hits      []source.Hit
 	searching bool
@@ -628,6 +631,7 @@ func (a *App) Load() {
 	a.themeMode = parseTheme(data.Theme)
 	a.globalShortcut = data.GlobalShortcut
 	a.showIndices = !data.HideIndices
+	a.hideExtremes = data.HideExtremes
 	if a.sidebarWidth == 0 {
 		a.sidebarWidth = 348
 	}
@@ -707,7 +711,8 @@ func (a *App) save() {
 		SkippedVersion: a.skippedVersion,
 		TrayText:       trayText, GlobalShortcut: a.globalShortcut,
 		HideIndices: !a.showIndices, LowCoverEstimate: a.lowCoverEstimate,
-		Theme: a.themeMode,
+		HideExtremes: a.hideExtremes,
+		Theme:        a.themeMode,
 	}
 	if a.alerts != (store.Alerts{}) {
 		// The file names the rules once the user has set one, and not before,

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fmt"
+	"math"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -212,6 +214,153 @@ func TestBuyMarksSitOnTheLine(t *testing.T) {
 	}
 	if buyMarks(nil, txns) != nil {
 		t.Fatal("a window with no values has no marks")
+	}
+}
+
+func TestNavExtremesFindTheWindowEnds(t *testing.T) {
+	high, low, ok := navExtremes([]float64{1.20, 1.10, 0.90, 1.00})
+	if !ok || high != 0 || low != 2 {
+		t.Fatalf("extremes = %d, %d, %v; want 0, 2, true", high, low, ok)
+	}
+	// Ties take the first occurrence, so a plateau names its first day.
+	high, low, ok = navExtremes([]float64{1.00, 1.20, 1.20, 0.80, 0.80})
+	if !ok || high != 1 || low != 3 {
+		t.Fatalf("tied extremes = %d, %d, %v; want 1, 3, true", high, low, ok)
+	}
+	for _, adj := range [][]float64{nil, {1.20}, {1.10, 1.10, 1.10},
+		// Float noise in the back-adjusted series is still flat.
+		{1.10, math.Nextafter(1.10, 2), 1.10}} {
+		if _, _, ok := navExtremes(adj); ok {
+			t.Errorf("%v was read as having extremes", adj)
+		}
+	}
+}
+
+func TestTrendChartMarksTheWindowsHighAndLow(t *testing.T) {
+	a := preview(t)
+	f := a.funds[0]
+	day := func(n int) string { return now().AddDate(0, 0, -n).Format("2006-01-02") }
+	f.Navs = []model.Nav{
+		{Date: day(20), Unit: 1.00},
+		{Date: day(15), Unit: 1.20},
+		{Date: day(10), Unit: 0.90},
+		{Date: day(5), Unit: 1.05},
+		{Date: day(0), Unit: 1.10},
+	}
+	a.sel, a.period, a.navView, a.pick = 0, 0, 0, -1
+	tt := ui.NewTester(a.View, 1080, 840)
+	tt.Frame()
+	// The labels read the line's back-adjusted values, which here are the
+	// published units.
+	for _, text := range []string{"最高 1.2000", "最低 0.9000"} {
+		if !tt.HasText(text) {
+			t.Errorf("the trend does not mark %q: %v", text, tt.Texts())
+		}
+	}
+
+	// The switch at the chart's bottom-right hides the markers, remembers the
+	// choice, and brings them back.
+	clickSwitch := func() {
+		t.Helper()
+		acc, ok := tt.AccessByRole(ui.RoleSwitch, "净值高低点")
+		if !ok {
+			t.Fatalf("the chart has no 净值高低点 switch: %v", tt.Texts())
+		}
+		tt.ClickAt(acc.Bounds.X+acc.Bounds.W/2, acc.Bounds.Y+acc.Bounds.H/2)
+		tt.Frame()
+	}
+	clickSwitch()
+	if !a.hideExtremes {
+		t.Fatal("the switch did not hide the extremes")
+	}
+	for _, text := range []string{"最高", "最低"} {
+		if tt.HasText(text) {
+			t.Errorf("the trend still marks %q after the switch hid it: %v", text, tt.Texts())
+		}
+	}
+	b := New(a.dir)
+	b.Load()
+	if !b.hideExtremes {
+		t.Fatal("the hidden extremes were not saved")
+	}
+	clickSwitch()
+	if a.hideExtremes {
+		t.Fatal("the switch did not show the extremes again")
+	}
+	for _, text := range []string{"最高 1.2000", "最低 0.9000"} {
+		if !tt.HasText(text) {
+			t.Errorf("the trend does not mark %q after the switch turned it back on: %v", text, tt.Texts())
+		}
+	}
+
+	// A flat window has no high or low to tell apart.
+	for i := range f.Navs {
+		f.Navs[i].Unit = 1.00
+	}
+	tt.Frame()
+	if tt.HasText("最高") || tt.HasText("最低") {
+		t.Fatalf("a flat window named an extreme: %v", tt.Texts())
+	}
+}
+
+// TestTrendExtremesStayInTheirBands keeps the high label above its point and
+// the low one below it, at the window's ordinary and minimum sizes: the
+// reserved bands at the plot's ends are what keep them clear of the line.
+func TestTrendExtremesStayInTheirBands(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{1080, 840}, {900, 600}} {
+		for _, rise := range []bool{true, false} {
+			name := map[bool]string{true: "rise", false: "fall"}[rise]
+			t.Run(fmt.Sprintf("%s/%dx%d", name, size.w, size.h), func(t *testing.T) {
+				a := preview(t)
+				f := a.funds[0]
+				f.Navs, f.Txns = nil, nil
+				first, last := 1.00, 1.24
+				if !rise {
+					first, last = 1.30, 1.06
+				}
+				step := (last - first) / 24
+				for i := range 25 {
+					f.Navs = append(f.Navs, model.Nav{
+						Date: now().AddDate(0, 0, -(24 - i)).Format("2006-01-02"),
+						Unit: first + float64(i)*step,
+					})
+				}
+				a.sel, a.period, a.navView, a.pick = 0, 0, 0, -1
+				tt := ui.NewTester(a.View, size.w, size.h)
+				tt.Frame()
+				tt.Frame()
+
+				plot, ok := tt.AccessByRole(ui.RoleGroup, "净值走势")
+				if !ok {
+					t.Fatal("the chart has no plot area")
+				}
+				pr := plot.Bounds
+				highText := fmt.Sprintf("最高 %.4f", math.Max(first, last))
+				lowText := fmt.Sprintf("最低 %.4f", math.Min(first, last))
+				high := requireBox(t, tt, highText)
+				low := requireBox(t, tt, lowText)
+				for label, r := range map[string]ui.Rect{highText: high, lowText: low} {
+					if r.X < pr.X || r.X+r.W > pr.X+pr.W ||
+						r.Y < pr.Y || r.Y+r.H > pr.Y+pr.H {
+						t.Errorf("%s is outside the plot %+v: %+v", label, pr, r)
+					}
+				}
+				if high.Y+high.H > low.Y || low.Y+low.H > high.Y {
+					if high.X < low.X+low.W && low.X < high.X+high.W {
+						t.Errorf("the extremes overlap: high %+v low %+v", high, low)
+					}
+				}
+				// The outer bands are where the labels belong; a flip into the
+				// plot would put the high label below the middle, or the low
+				// one above it, where the line is.
+				if high.Y+high.H > pr.Y+pr.H*0.45 {
+					t.Errorf("the high label sits in the line's part of the plot: %+v in %+v", high, pr)
+				}
+				if low.Y < pr.Y+pr.H*0.55 {
+					t.Errorf("the low label sits in the line's part of the plot: %+v in %+v", low, pr)
+				}
+			})
+		}
 	}
 }
 
