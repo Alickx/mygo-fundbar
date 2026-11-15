@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -275,32 +276,81 @@ func (c *Client) Managers(ctx context.Context, code string) ([]ManagerTerm, erro
 	return parseManagers(string(body)), nil
 }
 
-// Holdings reads the stocks of a fund's latest quarterly report, from the
-// page of its 持仓.
-func (c *Client) Holdings(ctx context.Context, code string) ([]model.Holding, string, error) {
+// maxReports is how many quarterly reports a fund's holdings history keeps:
+// the quarters of the newest report's year, and the newest of the year before
+// when that year holds fewer than maxReports of them.
+const maxReports = 4
+
+// Report is the holdings of one quarterly report.
+type Report struct {
+	// Label is the quarter the report covers, as the site names it:
+	// "2026年3季度".
+	Label string
+	// Date is the day the report closes on: "2026-09-30".
+	Date string
+	// Holdings are the stocks the report discloses, heaviest first.
+	Holdings []model.Holding
+}
+
+// Holdings reads the stocks of a fund's recent quarterly reports, newest
+// first, at most maxReports of them, from the page of its 持仓.
+func (c *Client) Holdings(ctx context.Context, code string) ([]Report, error) {
+	src, err := c.holdings(ctx, code, "")
+	if err != nil {
+		return nil, err
+	}
+	reports := parseReports(src)
+	// A page holds one year's tables: the newest report's year, or nothing
+	// at all early in a year that has published no report yet. The history
+	// asks the years before it for what is missing.
+	oldest := 0
+	if len(reports) > 0 {
+		oldest = yearOf(reports[len(reports)-1].Date)
+	}
+	cur := curYearOf(src)
+	for _, year := range yearsOf(src) {
+		if len(reports) >= maxReports {
+			break
+		}
+		if year == cur || (oldest > 0 && year >= oldest) {
+			continue
+		}
+		page, err := c.holdings(ctx, code, strconv.Itoa(year))
+		if err != nil {
+			// The reports read so far are still worth showing.
+			break
+		}
+		older := parseReports(page)
+		if len(older) == 0 {
+			// No table of a year means none of the years before it either.
+			break
+		}
+		if oldest == 0 {
+			oldest = yearOf(older[len(older)-1].Date)
+		}
+		reports = append(reports, older...)
+	}
+	if len(reports) > maxReports {
+		reports = reports[:maxReports]
+	}
+	if len(reports) == 0 {
+		return nil, errNotFound
+	}
+	return reports, nil
+}
+
+// holdings reads the holdings tables of one year, the newest year when year
+// is "".
+func (c *Client) holdings(ctx context.Context, code, year string) (string, error) {
 	url := "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code=" + code + "&topline=10"
+	if year != "" {
+		url += "&year=" + year
+	}
 	body, err := c.get(ctx, url, "https://fundf10.eastmoney.com/ccmx_"+code+".html")
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
-	src := string(body)
-	// Only the newest report: the tables of the older ones follow it.
-	if i := strings.Index(src, "</table>"); i > 0 {
-		src = src[:i]
-	}
-	var report string
-	if i := strings.LastIndex(src, "截止至："); i >= 0 {
-		rest := src[i+len("截止至："):]
-		if j := strings.Index(rest, "</font>"); j >= 0 {
-			rest = rest[:j]
-		}
-		report = cleanTag(rest)
-	}
-	holdings := parseHoldings(src)
-	if len(holdings) == 0 {
-		return nil, report, errNotFound
-	}
-	return holdings, report, nil
+	return string(body), nil
 }
 
 // Industries reads the fund's allocation by industry in its latest report,
@@ -536,7 +586,84 @@ func cellNames(cell string) []string {
 	return names
 }
 
-// parseHoldings reads the stocks of the first holdings table on a page.
+// quarterRE finds the quarter a report's heading names.
+var quarterRE = regexp.MustCompile(`\d{4}年[1-4]季度`)
+
+// parseReports reads the quarterly tables of a holdings page: each one's
+// quarter, the day it closes on, and the stocks it discloses.
+func parseReports(src string) []Report {
+	var out []Report
+	parts := strings.Split(src, "<h4 class='t'>")
+	for _, part := range parts[1:] {
+		holdings := parseHoldings(part)
+		if len(holdings) == 0 {
+			continue
+		}
+		out = append(out, Report{
+			Label:    quarterRE.FindString(part),
+			Date:     reportDate(part),
+			Holdings: holdings,
+		})
+	}
+	return out
+}
+
+// reportDate takes the closing day out of a report's heading.
+func reportDate(s string) string {
+	i := strings.Index(s, "截止至：")
+	if i < 0 {
+		return ""
+	}
+	rest := s[i+len("截止至："):]
+	if j := strings.Index(rest, "</font>"); j >= 0 {
+		rest = rest[:j]
+	}
+	return cleanTag(rest)
+}
+
+// yearsOf lists the years the page has reports for, newest first.
+func yearsOf(src string) []int {
+	i := strings.Index(src, "arryear:[")
+	if i < 0 {
+		return nil
+	}
+	rest := src[i+len("arryear:["):]
+	if j := strings.IndexByte(rest, ']'); j >= 0 {
+		rest = rest[:j]
+	}
+	var years []int
+	for _, field := range strings.Split(rest, ",") {
+		if year, err := strconv.Atoi(strings.TrimSpace(field)); err == nil {
+			years = append(years, year)
+		}
+	}
+	return years
+}
+
+// curYearOf is the year the page takes as the current one.
+func curYearOf(src string) int {
+	i := strings.Index(src, "curyear:")
+	if i < 0 {
+		return 0
+	}
+	return numberAt(src[i+len("curyear:"):])
+}
+
+// yearOf takes the year out of a date, "2026" out of "2026-09-30".
+func yearOf(date string) int { return numberAt(date) }
+
+// numberAt reads the number the text starts with, 0 when it starts with
+// something else.
+func numberAt(s string) int {
+	n := 0
+	for i := 0; i < len(s) && s[i] >= '0' && s[i] <= '9'; i++ {
+		n = n*10 + int(s[i]-'0')
+	}
+	return n
+}
+
+// parseHoldings reads the stocks of the holdings tables in a fragment: a
+// whole page of them, or the one report parseReports cut out of it.
 func parseHoldings(src string) []model.Holding {
 	var out []model.Holding
 	for _, row := range strings.Split(src, "<tr") {
@@ -550,13 +677,16 @@ func parseHoldings(src string) []model.Holding {
 		// A stock whose exchange has no price here still shows, without a
 		// symbol, as the holdings of a fund that buys abroad do.
 		symbol := Symbol(link)
-		var name string
-		if i := strings.Index(row, "<td class='tol'>"); i >= 0 {
-			name = cellName(row[i+len("<td class='tol'>"):])
-		}
+		_, code, _ := strings.Cut(link, ".")
+		name := stockName(row, code)
+		// The weight is the row's only percent cell. Which cells are
+		// right-aligned and which left depends on the fund's page, so both
+		// are read; the day's change beside them is filled in by script.
 		var weight float64
-		for _, cell := range strings.Split(row, "<td class='tor'>")[1:] {
-			text := strings.TrimSpace(cleanTag(cell))
+		for _, cell := range strings.Split(row, "<td")[1:] {
+			// The split left the cell's own tag on its text.
+			rest := cell[strings.IndexByte(cell, '>')+1:]
+			text := strings.TrimSpace(cleanTag(rest))
 			if strings.HasSuffix(text, "%") {
 				weight, _ = strconv.ParseFloat(strings.TrimSuffix(text, "%"), 64)
 				break
@@ -565,7 +695,6 @@ func parseHoldings(src string) []model.Holding {
 		if weight <= 0 {
 			continue
 		}
-		_, code, _ := strings.Cut(link, ".")
 		out = append(out, model.Holding{
 			Symbol: symbol,
 			Code:   code,
@@ -576,21 +705,21 @@ func parseHoldings(src string) []model.Holding {
 	return out
 }
 
-// cellName takes the name out of a cell: the text of its first link, or the
-// cell's own text when it has none.
-func cellName(cell string) string {
-	if i := strings.Index(cell, "<a"); i >= 0 {
-		rest := cell[i:]
-		if j := strings.IndexByte(rest, '>'); j >= 0 {
-			rest = rest[j+1:]
-			if k := strings.Index(rest, "</a>"); k >= 0 {
-				if name := strings.TrimSpace(rest[:k]); name != "" {
-					return name
-				}
-			}
+// stockName takes the stock's name out of its row: the text of the first
+// link that is not the code itself. Which cell holds the name, and how it is
+// aligned, differs between a fund's page and a fund buying abroad.
+func stockName(row, code string) string {
+	for _, link := range strings.Split(row, "<a")[1:] {
+		i := strings.IndexByte(link, '>')
+		j := strings.Index(link, "</a>")
+		if i < 0 || j < i {
+			continue
+		}
+		if name := strings.TrimSpace(cleanTag(link[i+1 : j])); name != "" && name != code {
+			return name
 		}
 	}
-	return cleanTag(cell)
+	return ""
 }
 
 // cleanTag takes the text out of the first cell or link of a fragment.

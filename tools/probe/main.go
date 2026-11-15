@@ -39,9 +39,13 @@ func main() {
 			fmt.Printf("%s 读取基金失败: %v\n", code, err)
 			continue
 		}
-		hs, _, err := c.Holdings(ctx, code)
+		reports, err := c.Holdings(ctx, code)
 		if err != nil {
 			fmt.Printf("%s 读取持仓失败: %v\n", code, err)
+		}
+		var hs []model.Holding
+		if len(reports) > 0 {
+			hs = reports[0].Holdings
 		}
 		funds[code] = f
 		holdings[code] = hs

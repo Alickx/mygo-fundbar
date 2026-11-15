@@ -208,6 +208,10 @@ type Snapshot struct {
 	// ManagersAt is when the management history was last read. Its zero
 	// value means a cache from before the history was kept.
 	ManagersAt time.Time `json:"managersAt,omitempty"`
+	// Reports are the fund's recent quarterly holdings, newest first, of
+	// which Holdings is the newest. They are kept in memory alone: a cache
+	// file carries none, so the app reads them again when it opens one.
+	Reports []source.Report `json:"-"`
 }
 
 func snapshotPath(dir, code string) string {

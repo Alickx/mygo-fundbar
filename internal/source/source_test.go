@@ -1,6 +1,7 @@
 package source
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +75,57 @@ func TestParseHoldings(t *testing.T) {
 		if h.Symbol != w.symbol || h.Code != w.code || h.Name != w.name || h.Weight != w.weight {
 			t.Errorf("holding %d = %+v, want %+v", i, h, w)
 		}
+	}
+}
+
+// Two quarters of a holdings page, as the fund site sends them: the newest
+// table first, and the years with reports at the end.
+const reportsHTML = `<div class='box'><div class='boxitem w790'><h4 class='t'><label class='left'><a title='华夏成长混合' href='http://fund.eastmoney.com/000001.html'>华夏成长混合</a>&nbsp;&nbsp;2026年3季度股票投资明细</label><label class='right lab2 xq505'>&nbsp;&nbsp;&nbsp;&nbsp;来源：天天基金&nbsp;&nbsp;&nbsp;&nbsp;截止至：<font class='px12'>2026-09-30</font></label></h4><div class='space0'></div><table class='w782 comm tzxq'><tbody><tr><td>1</td><td class='toc'><a href='//quote.eastmoney.com/unify/r/1.600519'>600519</a></td><td class='tol'><a href='//quote.eastmoney.com/unify/r/1.600519'>贵州茅台</a></td><td class='toc'><span data-id='zd600519'></span></td><td class='toc'>6.37%</td><td class='toc'>95.85</td></tr></tbody></table></div><div class='boxitem w790'><h4 class='t'><label class='left'>华夏成长混合&nbsp;&nbsp;2026年2季度股票投资明细</label><label class='right lab2 xq505'>&nbsp;&nbsp;&nbsp;&nbsp;来源：天天基金&nbsp;&nbsp;&nbsp;&nbsp;截止至：<font class='px12'>2026-06-30</font></label></h4><table class='w782 comm tzxq'><tbody><tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/0.000858'>000858</a></td><td class='tol'><a href='//quote.eastmoney.com/unify/r/0.000858'>五粮液</a></td><td class='tor'><span data-id='zd000858'></span></td><td class='tor'>5.00%</td><td class='tor'>42.64</td></tr></tbody></table></div>",arryear:[2026,2025,2024],curyear:2026};`
+
+func TestParseReports(t *testing.T) {
+	got := parseReports(reportsHTML)
+	if len(got) != 2 {
+		t.Fatalf("parsed %d reports, want 2", len(got))
+	}
+	if got[0].Label != "2026年3季度" || got[0].Date != "2026-09-30" {
+		t.Errorf("newest report = %q on %q, want 2026年3季度 on 2026-09-30",
+			got[0].Label, got[0].Date)
+	}
+	if len(got[0].Holdings) != 1 || got[0].Holdings[0].Weight != 6.37 ||
+		got[0].Holdings[0].Name != "贵州茅台" {
+		t.Errorf("newest report's holdings = %+v", got[0].Holdings)
+	}
+	if got[1].Label != "2026年2季度" || got[1].Date != "2026-06-30" ||
+		len(got[1].Holdings) != 1 || got[1].Holdings[0].Symbol != "sz000858" {
+		t.Errorf("older report = %+v", got[1])
+	}
+}
+
+func TestParseHoldingsReadsLeftAlignedWeights(t *testing.T) {
+	// A fund whose page puts the weights in left-aligned cells, as those
+	// trading abroad do.
+	got := parseHoldings(strings.Split(reportsHTML, "2026年2季度")[1])
+	if len(got) != 1 || got[0].Weight != 5.00 || got[0].Symbol != "sz000858" {
+		t.Fatalf("holdings = %+v, want 五粮液 at 5.00%%", got)
+	}
+}
+
+func TestYearsOf(t *testing.T) {
+	got := yearsOf(reportsHTML)
+	want := []int{2026, 2025, 2024}
+	if len(got) != len(want) {
+		t.Fatalf("years = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("years = %v, want %v", got, want)
+		}
+	}
+	if cur := curYearOf(reportsHTML); cur != 2026 {
+		t.Errorf("current year = %d, want 2026", cur)
+	}
+	if year := yearOf("2026-09-30"); year != 2026 {
+		t.Errorf("yearOf(2026-09-30) = %d, want 2026", year)
 	}
 }
 

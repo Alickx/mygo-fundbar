@@ -65,6 +65,14 @@ type Fund struct {
 	IndustryReport string
 	// ManagerTerms is the fund's management in turn, newest first.
 	ManagerTerms []source.ManagerTerm
+	// History is the fund's recent quarterly holdings, newest first, of
+	// which Holdings is the newest. It is kept in memory alone, so a fund
+	// read from the cache before the first refresh has only the newest
+	// report to show.
+	History []source.Report
+	// ReportIdx is the quarter the holdings card lists, an index into
+	// History: 0 is the newest, the one the estimate is made of.
+	ReportIdx int
 
 	Est    model.Estimate
 	HasEst bool
@@ -73,6 +81,50 @@ type Fund struct {
 	// Err is why the fund could not be read, if it could not.
 	Err    string
 	Loaded bool
+}
+
+// shownReport is the report the holdings card lists, when it is not the
+// newest one the fund disclosed.
+func (f *Fund) shownReport() (source.Report, bool) {
+	if f.ReportIdx > 0 && f.ReportIdx < len(f.History) {
+		return f.History[f.ReportIdx], true
+	}
+	return source.Report{}, false
+}
+
+// ShownReport is the day the report the holdings card lists closes on.
+func (f *Fund) ShownReport() string {
+	if r, ok := f.shownReport(); ok {
+		return r.Date
+	}
+	return f.Report
+}
+
+// ShownHoldings are the stocks the holdings card lists: those of the report
+// the user chose, or of the newest one, which is the estimate's.
+func (f *Fund) ShownHoldings() []model.Holding {
+	if r, ok := f.shownReport(); ok {
+		return r.Holdings
+	}
+	return f.Holdings
+}
+
+// ShowingHistory reports that the card lists a report older than the newest
+// one: its stocks are not what the fund holds today, and the day's prices
+// say nothing of it.
+func (f *Fund) ShowingHistory() bool {
+	_, ok := f.shownReport()
+	return ok
+}
+
+// showReport makes the holdings card list the report at i of the fund's
+// history.
+func (a *App) showReport(f *Fund, i int) {
+	if i < 0 || i >= len(f.History) {
+		return
+	}
+	f.ReportIdx = i
+	a.redraw()
 }
 
 // In reports that the fund is listed in a group.
@@ -650,6 +702,13 @@ func (a *App) fill(f *Fund, snap *store.Snapshot) {
 	f.StockPosition = snap.Fund.StockPosition
 	f.Holdings = snap.Holdings
 	f.Report = snap.Report
+	// A new report starts the card at the newest quarter again; the history
+	// of the one listed before stays while the reports are the same, as a
+	// cache beside them leaves it out.
+	if len(snap.Reports) > 0 && (len(f.History) == 0 || f.History[0].Date != snap.Reports[0].Date) {
+		f.History = snap.Reports
+		f.ReportIdx = 0
+	}
 	f.Industries = snap.Fund.Industries
 	f.IndustryReport = snap.Fund.IndustryReport
 	f.ManagerTerms = snap.Fund.ManagerTerms
@@ -813,11 +872,15 @@ func (a *App) refresh() {
 	}
 	a.busy = true
 	codes := make([]string, 0, len(a.all))
-	types := make(map[string]string, len(a.all))
+	// history marks the funds whose quarterly holdings are not in memory
+	// yet, which the cache alone cannot give.
+	history := make(map[string]bool, len(a.all))
 	cached := make(map[string]*store.Snapshot, len(a.all))
 	for _, f := range a.all {
 		codes = append(codes, f.Code)
-		types[f.Code] = f.Type
+		if len(f.History) == 0 {
+			history[f.Code] = true
+		}
 		if snap, ok := store.LoadSnapshot(a.dir, f.Code); ok {
 			cached[f.Code] = snap
 		}
@@ -841,7 +904,7 @@ func (a *App) refresh() {
 				slots <- struct{}{}
 				defer func() { <-slots }()
 				r := result{code: code}
-				r.snap = a.readFund(ctx, code, types[code], cached[code])
+				r.snap = a.readFund(ctx, code, cached[code], history[code])
 				results[i] = r
 			}()
 		}
@@ -941,10 +1004,20 @@ func (a *App) refresh() {
 }
 
 // readFund reads a fund, from the cache when it is today's.
-func (a *App) readFund(ctx context.Context, code, kind string, cached *store.Snapshot) *store.Snapshot {
+func (a *App) readFund(ctx context.Context, code string, cached *store.Snapshot, wantHistory bool) *store.Snapshot {
 	if cached != nil && time.Since(cached.At) < 20*time.Minute && fresh(cached) &&
 		cached.Fund.IndustriesLoaded && !cached.ManagersAt.IsZero() {
-		return cached
+		if !wantHistory {
+			return cached
+		}
+		// The history is kept in memory alone, so a cache opened without it
+		// asks the holdings page once more.
+		snap := *cached
+		if reports, err := a.src.Holdings(ctx, code); err == nil && len(reports) > 0 {
+			snap.Reports = reports
+			snap.Holdings, snap.Report = reports[0].Holdings, reports[0].Date
+		}
+		return &snap
 	}
 	fund, err := a.src.Fund(ctx, code)
 	if err != nil {
@@ -966,9 +1039,11 @@ func (a *App) readFund(ctx context.Context, code, kind string, cached *store.Sna
 			managersAt = time.Now()
 		}
 	}
-	holdings, report, err := a.src.Holdings(ctx, code)
-	if err != nil && cached != nil && len(cached.Holdings) > 0 {
-		holdings, report = cached.Holdings, cached.Report
+	reports, _ := a.src.Holdings(ctx, code)
+	var holdings []model.Holding
+	var report string
+	if len(reports) > 0 {
+		holdings, report = reports[0].Holdings, reports[0].Date
 	}
 	if len(holdings) == 0 {
 		// Nothing to estimate from, but the fund itself is worth showing.
@@ -986,6 +1061,7 @@ func (a *App) readFund(ctx context.Context, code, kind string, cached *store.Sna
 	}
 	return &store.Snapshot{
 		At: time.Now(), Fund: fund, Holdings: holdings, Report: report,
+		Reports:  reports,
 		Profiles: cachedProfiles(cached), ManagersAt: managersAt,
 	}
 }

@@ -1004,40 +1004,82 @@ func profitNote(f *Fund) string {
 	return "最新交易日"
 }
 
+// reportMenu names the report the holdings card lists, and offers the ones
+// the fund disclosed before it. A fund whose history is not read yet, or has
+// a single report, shows the date alone.
+func (a *App) reportMenu(c *ui.Context, t *ui.Theme, f *Fund) {
+	if f.Report == "" && len(f.History) == 0 {
+		return
+	}
+	if len(f.History) < 2 {
+		ui.Text(c, "报告期 "+f.ShownReport()).FontSize(11.5).TextColor(t.TextMuted).
+			FontFeatures("tnum").NoWrap()
+		return
+	}
+	quarter := f.ReportIdx
+	if quarter < 0 || quarter >= len(f.History) {
+		quarter = 0
+	}
+	// The button names the quarter the card lists; each item names the day
+	// its report closes on, so a reader can tell them apart.
+	label := f.History[quarter].Label
+	if label == "" {
+		label = "报告期 " + f.History[quarter].Date
+	}
+	ui.PopoverMenuButton(c, label, func(m *ui.Menu) {
+		m.MaxWidth(260)
+		for i, r := range f.History {
+			name := r.Label
+			if name == "" {
+				name = "季报"
+			}
+			it := m.Item(name + " · " + r.Date).Radio(i == f.ReportIdx)
+			if it.Chosen() {
+				a.showReport(f, i)
+			}
+		}
+	}).Tooltip("报告期 " + f.History[quarter].Date + " · 可切换历史季度")
+}
+
 func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 	ui.Column(c).Gap(9).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Wrap().Children(func() {
 			ui.Text(c, "重仓股").FontSize(13).FontWeight(600).NoWrap().Shrink(0)
-			if f.Report != "" {
-				ui.Text(c, "报告期 "+f.Report).FontSize(11.5).TextColor(t.TextMuted).
-					FontFeatures("tnum").NoWrap()
-			}
+			a.reportMenu(c, t, f)
 			ui.Spacer(c)
 			if f.StockPosition > 0 {
 				ui.Textf(c, "股票仓位 %.1f%%", f.StockPosition).FontSize(11.5).
 					TextColor(t.TextMuted).FontFeatures("tnum").NoWrap()
 			}
-			if f.HasEst {
-				ui.Textf(c, "覆盖 %.1f%%", f.Est.Cover).FontSize(11.5).
-					TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
-					Tooltip("前十大重仓股合计占基金净值的比例，越高估值越准")
-			}
-			// The record says how far the estimate has been off lately, so a
-			// careful reader can weigh the number above it.
-			switch acc := summarizeEstimateAccuracy(a.estimates[f.Code]); {
-			case acc.Finished >= 3:
-				ui.Textf(c, "估值偏差 ±%.2f%%", acc.Mean).FontSize(11.5).
-					TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
-					Tooltip(acc.tip())
-			case acc.Finished > 0:
-				ui.Text(c, "估值偏差记录中").FontSize(11.5).
-					TextColor(t.TextMuted).NoWrap().
-					Tooltip("至少 3 个交易日的已公布净值之后，才会给出平均偏差")
+			// The coverage and the record describe the newest report alone:
+			// a past quarter is not what the estimate is made of.
+			if !f.ShowingHistory() {
+				if f.HasEst {
+					ui.Textf(c, "覆盖 %.1f%%", f.Est.Cover).FontSize(11.5).
+						TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
+						Tooltip("前十大重仓股合计占基金净值的比例，越高估值越准")
+				}
+				// The record says how far the estimate has been off lately,
+				// so a careful reader can weigh the number above it.
+				switch acc := summarizeEstimateAccuracy(a.estimates[f.Code]); {
+				case acc.Finished >= 3:
+					ui.Textf(c, "估值偏差 ±%.2f%%", acc.Mean).FontSize(11.5).
+						TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
+						Tooltip(acc.tip())
+				case acc.Finished > 0:
+					ui.Text(c, "估值偏差记录中").FontSize(11.5).
+						TextColor(t.TextMuted).NoWrap().
+						Tooltip("至少 3 个交易日的已公布净值之后，才会给出平均偏差")
+				}
 			}
 		})
 		body := card(c, t)
 		body.Gap(4).Children(func() {
-			if len(f.Holdings) == 0 {
+			// A past quarter's stocks are not the ones the fund holds now,
+			// so the prices of the day say nothing of them: the card lists
+			// the weights of that quarter alone.
+			holdings, past := f.ShownHoldings(), f.ShowingHistory()
+			if len(holdings) == 0 {
 				ui.Text(c, "还没有读到持仓，刷新试试").FontSize(11.5).
 					TextColor(t.TextMuted)
 				return
@@ -1047,10 +1089,12 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 				ui.Text(c, "名称").FontSize(11).TextColor(t.TextMuted).Grow(1)
 				ui.Text(c, "占净值比").FontSize(11).TextColor(t.TextMuted).
 					Width(numW).TextAlign(ui.End)
-				ui.Text(c, "今日涨跌").FontSize(11).TextColor(t.TextMuted).
-					Width(numW).TextAlign(ui.End)
+				if !past {
+					ui.Text(c, "今日涨跌").FontSize(11).TextColor(t.TextMuted).
+						Width(numW).TextAlign(ui.End)
+				}
 			})
-			for i, h := range f.Holdings {
+			for i, h := range holdings {
 				q, quoted := f.Quotes[h.Symbol]
 				change := "—"
 				if quoted {
@@ -1081,8 +1125,10 @@ func (a *App) holdingsCard(c *ui.Context, t *ui.Theme, f *Fund) {
 					ui.Textf(c, "%.2f%%", h.Weight).FontSize(11.5).
 						TextColor(t.TextMuted).FontFeatures("tnum").NoWrap().
 						Width(numW).TextAlign(ui.End)
-					ui.Text(c, change).FontSize(11.5).TextColor(up(t, q.Pct)).
-						FontFeatures("tnum").NoWrap().Width(numW).TextAlign(ui.End)
+					if !past {
+						ui.Text(c, change).FontSize(11.5).TextColor(up(t, q.Pct)).
+							FontFeatures("tnum").NoWrap().Width(numW).TextAlign(ui.End)
+					}
 				})
 			}
 		})
