@@ -209,7 +209,7 @@ func TestSettledAnnouncesWhenAllArePublished(t *testing.T) {
 		t.Fatalf("notes = %+v, want one", notes)
 	}
 	body := notes[0].Body
-	if !strings.Contains(body, "2 只已全部公布") || !strings.Contains(body, "今日收益") {
+	if !strings.HasPrefix(body, "今日收益 ") {
 		t.Fatalf("body = %q", body)
 	}
 	if again, _ := evaluate(AlertConfig{Settled: true}, state, funds, at); len(again) != 0 {
@@ -217,7 +217,7 @@ func TestSettledAnnouncesWhenAllArePublished(t *testing.T) {
 	}
 }
 
-func TestSettledAfterTenCountsTheRest(t *testing.T) {
+func TestSettledAfterTenAlsoAnnouncesPartial(t *testing.T) {
 	at := alertAt(22)
 	funds := []*Fund{
 		navFund("007760", "基金A", 1000, 1, at, true),
@@ -227,7 +227,7 @@ func TestSettledAfterTenCountsTheRest(t *testing.T) {
 	if len(notes) != 1 {
 		t.Fatalf("notes = %+v, want one", notes)
 	}
-	if !strings.Contains(notes[0].Body, "已公布 1 只 · 待公布 1 只") {
+	if !strings.HasPrefix(notes[0].Body, "今日收益 ") {
 		t.Fatalf("body = %q", notes[0].Body)
 	}
 

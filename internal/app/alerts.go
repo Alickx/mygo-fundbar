@@ -204,22 +204,18 @@ func evaluateSettled(cfg AlertConfig, prev, next *store.AlertState, funds []*Fun
 	return []Note{{
 		ID:    allNote + "settled:" + day,
 		Title: "净值公布提醒",
-		Body:  settledBody(held, published, pending),
+		Body:  settledBody(held),
 	}}
 }
 
-// settledBody says how many values are out and what the holding group's day
-// was, as the menu bar item reports it.
-func settledBody(funds []*Fund, published, pending int) string {
-	count := fmt.Sprintf("%d 只已全部公布", len(funds))
-	if pending > 0 {
-		count = fmt.Sprintf("已公布 %d 只 · 待公布 %d 只", published, pending)
-	}
+// settledBody says what the holding group's day was, as the menu bar item
+// reports it.
+func settledBody(funds []*Fund) string {
 	s := summarizeFunds(funds, true)
 	if s.Holding {
-		return count + " · 今日收益 " + signedMoney(s.Profit) + " 元（" + pct(s.Pct) + "）"
+		return "今日收益 " + signedMoney(s.Profit) + " 元（" + pct(s.Pct) + "）"
 	}
-	return count + " · 平均涨跌 " + pct(s.Pct)
+	return "平均涨跌 " + pct(s.Pct)
 }
 
 // evaluateTargets announces a fund entering the zone of its price target. A
